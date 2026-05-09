@@ -61,36 +61,89 @@ def get_fx_rates(pair: str = "USDTWD") -> pd.DataFrame:
     return load_fx_rates(pair=pair)
 
 
+TEMPLATE_YAML = (
+    "holdings:\n"
+    "  - ticker: VTI\n"
+    "    market: US\n"
+    "    shares: 10\n"
+    "    cost_basis: 250.00\n"
+    "    currency: USD\n"
+    "  - ticker: 0050.TW\n"
+    "    market: TW\n"
+    "    shares: 1000\n"
+    "    cost_basis: 100.00\n"
+    "    currency: TWD\n"
+)
+
+
 def _ensure_holdings_loaded() -> bool:
-    """Resolve holdings source: uploaded → session → local file.
-    Returns True if holdings are loaded into the DB, False otherwise.
-    The result is shown via Streamlit widgets in the sidebar.
+    """Resolve holdings source: paste / upload → session → local file.
+    Returns True if holdings are loaded into the DB.
+    Mobile-friendly: file uploaders are flaky on iOS Safari, so a paste
+    text-area is provided as the primary input.
     """
     with st.sidebar:
         st.subheader("Your holdings")
-        uploaded = st.file_uploader(
-            "Upload holdings.yaml",
-            type=["yaml", "yml"],
-            help="Your holdings stay private — they live in this session only, never saved to the cloud.",
-        )
 
         rows = None
         source = None
 
-        if uploaded is not None:
-            try:
-                content = uploaded.getvalue().decode("utf-8")
-                rows = parse_holdings_yaml(content)
-                st.session_state["holdings_rows"] = rows
-                st.session_state["holdings_source"] = "upload"
-                source = "uploaded"
-            except Exception as e:
-                st.error(f"Could not parse YAML: {e}")
-                return False
-        elif "holdings_rows" in st.session_state:
+        tab_paste, tab_upload = st.tabs(["📋 Paste", "📁 Upload"])
+
+        with tab_paste:
+            current_text = st.session_state.get("holdings_text", "")
+            text = st.text_area(
+                "Paste your YAML here",
+                value=current_text,
+                height=220,
+                placeholder=TEMPLATE_YAML,
+                help="Works on any device including iOS / Android browsers.",
+                key="holdings_text_input",
+            )
+            apply_paste = st.button("Apply pasted YAML", use_container_width=True)
+            if apply_paste and text.strip():
+                try:
+                    rows = parse_holdings_yaml(text)
+                    if not rows:
+                        st.error("YAML parsed but no `holdings:` entries found.")
+                        rows = None
+                    else:
+                        st.session_state["holdings_rows"] = rows
+                        st.session_state["holdings_text"] = text
+                        source = "pasted"
+                except Exception as e:
+                    st.error(f"Could not parse YAML: {e}")
+                    return False
+
+        with tab_upload:
+            # Allow broader extensions; iOS often saves YAML as .txt or has no
+            # MIME type for unknown extensions, so accepting anything text-y helps.
+            uploaded = st.file_uploader(
+                "Upload holdings.yaml / .yml / .txt",
+                type=["yaml", "yml", "txt", "yamlk"],
+                accept_multiple_files=False,
+                help="If your phone won't show .yaml files, switch to the Paste tab.",
+            )
+            if rows is None and uploaded is not None:
+                try:
+                    content = uploaded.getvalue().decode("utf-8", errors="replace")
+                    parsed = parse_holdings_yaml(content)
+                    if not parsed:
+                        st.error("File parsed but no `holdings:` entries found.")
+                    else:
+                        rows = parsed
+                        st.session_state["holdings_rows"] = rows
+                        st.session_state["holdings_text"] = content
+                        source = "uploaded"
+                except Exception as e:
+                    st.error(f"Could not parse uploaded file: {e}")
+                    return False
+
+        # Fall back to existing session, then local dev file
+        if rows is None and "holdings_rows" in st.session_state:
             rows = st.session_state["holdings_rows"]
-            source = "session (uploaded earlier)"
-        elif LOCAL_HOLDINGS_PATH.exists():
+            source = "session (loaded earlier)"
+        if rows is None and LOCAL_HOLDINGS_PATH.exists():
             try:
                 with open(LOCAL_HOLDINGS_PATH, "r", encoding="utf-8") as f:
                     rows = parse_holdings_yaml(f.read())
@@ -100,22 +153,9 @@ def _ensure_holdings_loaded() -> bool:
                 return False
 
         if not rows:
-            st.info("👆 Upload your `holdings.yaml` to get started.")
-            with st.expander("Need a template?"):
-                st.code(
-                    "holdings:\n"
-                    "  - ticker: VTI\n"
-                    "    market: US\n"
-                    "    shares: 10\n"
-                    "    cost_basis: 250.00\n"
-                    "    currency: USD\n"
-                    "  - ticker: 0050.TW\n"
-                    "    market: TW\n"
-                    "    shares: 1000\n"
-                    "    cost_basis: 100.00\n"
-                    "    currency: TWD\n",
-                    language="yaml",
-                )
+            st.info("👆 Paste or upload your YAML to get started.")
+            with st.expander("Show template"):
+                st.code(TEMPLATE_YAML, language="yaml")
             return False
 
         # Sync to DB only if holdings actually changed (avoid clearing cache every rerun)
