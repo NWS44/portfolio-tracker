@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+data/*.db
+.streamlit/
+.venv/
+venv/
+.claude/settings.local.json
+*.log
+
+# Personal holdings — never commit. Use holdings.yaml.example as a template.
+config/holdings.yaml
+
+# Bundled tools (not source code)
+tools/

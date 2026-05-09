@@ -1,0 +1,34 @@
+# Copy this file to `holdings.yaml` and edit with your real holdings.
+# `holdings.yaml` is gitignored so your data stays private.
+#
+# Ticker formats:
+#   US: plain symbol (AAPL, MSFT, VOO, VTI)
+#   TW: append .TW for TWSE or .TWO for TPEx (e.g. 2330.TW, 6488.TWO)
+#
+# `cost_basis` is per-share in the listed currency (optional).
+# `currency` defaults to USD for US, TWD for TW (optional).
+
+holdings:
+  - ticker: VTI
+    market: US
+    shares: 10
+    cost_basis: 250.00
+    currency: USD
+
+  - ticker: AAPL
+    market: US
+    shares: 5
+    cost_basis: 180.50
+    currency: USD
+
+  - ticker: 2330.TW
+    market: TW
+    shares: 100
+    cost_basis: 600.00
+    currency: TWD
+
+  - ticker: 0050.TW
+    market: TW
+    shares: 1000
+    cost_basis: 130.00
+    currency: TWD

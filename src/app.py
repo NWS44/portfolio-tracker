@@ -1,0 +1,772 @@
+"""Streamlit dashboard for the stock-price portfolio tracker."""
+from __future__ import annotations
+
+import sys
+from datetime import date, timedelta
+from pathlib import Path
+
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+import streamlit as st
+from plotly.subplots import make_subplots
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "src"))
+
+from compute_totals import compute_daily_totals  # noqa: E402
+from db import (  # noqa: E402
+    init_db,
+    load_daily_totals,
+    load_fx_rates,
+    load_holdings,
+    load_prices,
+    replace_daily_totals,
+)
+from fetch_prices import (  # noqa: E402
+    fetch_for_tickers,
+    fetch_fx_rates,
+    parse_holdings_yaml,
+    sync_holdings_from_rows,
+)
+
+LOCAL_HOLDINGS_PATH = ROOT / "config" / "holdings.yaml"
+
+st.set_page_config(
+    page_title="Portfolio Tracker",
+    page_icon="📈",
+    layout="wide",
+)
+
+
+# Cache TTLs: prices/totals/fx cached for 6 hours since they only change after market close.
+# Holdings cached briefly so uploads take effect quickly.
+@st.cache_data(ttl=60)
+def get_holdings() -> pd.DataFrame:
+    return load_holdings()
+
+
+@st.cache_data(ttl=21600)  # 6 hours
+def get_prices(tickers: tuple[str, ...], start: str, end: str) -> pd.DataFrame:
+    return load_prices(tickers=list(tickers), start=start, end=end)
+
+
+@st.cache_data(ttl=21600)  # 6 hours
+def get_daily_totals(start: str, end: str) -> pd.DataFrame:
+    return load_daily_totals(start=start, end=end)
+
+
+@st.cache_data(ttl=21600)  # 6 hours
+def get_fx_rates(pair: str = "USDTWD") -> pd.DataFrame:
+    return load_fx_rates(pair=pair)
+
+
+def _ensure_holdings_loaded() -> bool:
+    """Resolve holdings source: uploaded → session → local file.
+    Returns True if holdings are loaded into the DB, False otherwise.
+    The result is shown via Streamlit widgets in the sidebar.
+    """
+    with st.sidebar:
+        st.subheader("Your holdings")
+        uploaded = st.file_uploader(
+            "Upload holdings.yaml",
+            type=["yaml", "yml"],
+            help="Your holdings stay private — they live in this session only, never saved to the cloud.",
+        )
+
+        rows = None
+        source = None
+
+        if uploaded is not None:
+            try:
+                content = uploaded.getvalue().decode("utf-8")
+                rows = parse_holdings_yaml(content)
+                st.session_state["holdings_rows"] = rows
+                st.session_state["holdings_source"] = "upload"
+                source = "uploaded"
+            except Exception as e:
+                st.error(f"Could not parse YAML: {e}")
+                return False
+        elif "holdings_rows" in st.session_state:
+            rows = st.session_state["holdings_rows"]
+            source = "session (uploaded earlier)"
+        elif LOCAL_HOLDINGS_PATH.exists():
+            try:
+                with open(LOCAL_HOLDINGS_PATH, "r", encoding="utf-8") as f:
+                    rows = parse_holdings_yaml(f.read())
+                source = "local config/holdings.yaml"
+            except Exception as e:
+                st.error(f"Could not read local holdings.yaml: {e}")
+                return False
+
+        if not rows:
+            st.info("👆 Upload your `holdings.yaml` to get started.")
+            with st.expander("Need a template?"):
+                st.code(
+                    "holdings:\n"
+                    "  - ticker: VTI\n"
+                    "    market: US\n"
+                    "    shares: 10\n"
+                    "    cost_basis: 250.00\n"
+                    "    currency: USD\n"
+                    "  - ticker: 0050.TW\n"
+                    "    market: TW\n"
+                    "    shares: 1000\n"
+                    "    cost_basis: 100.00\n"
+                    "    currency: TWD\n",
+                    language="yaml",
+                )
+            return False
+
+        # Sync to DB only if holdings actually changed (avoid clearing cache every rerun)
+        rows_sig = repr(sorted([(r.get("ticker"), r.get("shares")) for r in rows]))
+        if st.session_state.get("holdings_sig") != rows_sig:
+            sync_holdings_from_rows(rows)
+            st.session_state["holdings_sig"] = rows_sig
+            get_holdings.clear()
+
+        st.caption(f"Source: {source} · {len(rows)} tickers")
+        return True
+
+
+def _ensure_prices_loaded(tickers: list[str]) -> None:
+    """If the DB has no daily_totals for these tickers, auto-fetch from yfinance.
+    Cached so we don't refetch on every rerun within the cache window.
+    """
+    totals = load_daily_totals()
+    have_data = not totals.empty and set(tickers).issubset(set(totals["ticker"].unique()))
+    if have_data:
+        return
+
+    with st.spinner("Fetching prices from Yahoo Finance (first time, ~30s)..."):
+        fetch_for_tickers(tickers)
+        fetch_fx_rates()
+        df = compute_daily_totals()
+        replace_daily_totals(df)
+        get_prices.clear()
+        get_daily_totals.clear()
+        get_fx_rates.clear()
+
+
+def attach_twd_value(totals: pd.DataFrame, fx: pd.DataFrame) -> pd.DataFrame:
+    """Add a `value_twd` column. Uses USDTWD rate (forward-filled across the date range).
+    TWD rows pass through; USD rows are multiplied by that day's rate.
+    Drops any rows with zero/NaN value (treat as market holiday).
+    """
+    if totals.empty:
+        out = totals.copy()
+        out["value_twd"] = []
+        out["fx_rate"] = []
+        return out
+
+    out = totals.copy()
+    out = out[out["value"].notna() & (out["value"] > 0)]
+
+    if fx.empty:
+        out = out.copy()
+        out["fx_rate"] = float("nan")
+        out["value_twd"] = out["value"].where(out["currency"] == "TWD")
+        return out
+
+    fx = fx[["date", "rate"]].drop_duplicates("date").sort_values("date")
+    all_dates = pd.Index(sorted(set(out["date"].tolist()) | set(fx["date"].tolist())))
+    fx_full = (
+        fx.set_index("date")
+        .reindex(all_dates)
+        .ffill()
+        .bfill()
+        .reset_index()
+        .rename(columns={"index": "date"})
+    )
+
+    out = out.merge(fx_full, on="date", how="left").rename(columns={"rate": "fx_rate"})
+    out["value_twd"] = out.apply(
+        lambda r: r["value"] if r["currency"] == "TWD" else r["value"] * r["fx_rate"],
+        axis=1,
+    )
+    return out
+
+
+def _ffill_pivot(totals_twd: pd.DataFrame) -> pd.DataFrame:
+    """date × ticker pivot of value_twd, forward-filled across one-market holidays.
+    Pre-IPO cells (before a ticker's first trade) are filled with 0 so they don't
+    appear in the stack."""
+    if totals_twd.empty:
+        return pd.DataFrame()
+    return (
+        totals_twd.pivot_table(
+            index="date", columns="ticker", values="value_twd", aggfunc="last"
+        )
+        .sort_index()
+        .ffill()
+        .fillna(0)
+    )
+
+
+def combined_twd_series(totals_twd: pd.DataFrame) -> pd.DataFrame:
+    """Per-day combined portfolio value in TWD.
+    Forward-fills each ticker's value so a one-market holiday (US closed but TW
+    open, or vice versa) does not drop the combined line. Starts from the date
+    every currently-held ticker has at least one observation."""
+    pivot = _ffill_pivot(totals_twd)
+    if pivot.empty:
+        return pd.DataFrame(columns=["date", "value_twd"])
+    first_valid = pivot.replace(0, pd.NA).apply(lambda s: s.first_valid_index()).max()
+    if first_valid is not None:
+        pivot = pivot.loc[first_valid:]
+    out = pivot.sum(axis=1).reset_index()
+    out.columns = ["date", "value_twd"]
+    return out
+
+
+def stacked_twd_long(totals_twd: pd.DataFrame) -> pd.DataFrame:
+    """Long-form table for the per-ticker stacked area chart.
+    Forward-fills each ticker's value across holidays so the stack is continuous;
+    pre-IPO contributions stay at 0."""
+    pivot = _ffill_pivot(totals_twd)
+    if pivot.empty:
+        return pd.DataFrame(columns=["date", "ticker", "value_twd"])
+    pivot = pivot[pivot.sum(axis=1) > 0]
+    return pivot.reset_index().melt(
+        id_vars="date", var_name="ticker", value_name="value_twd"
+    )
+
+
+def refresh_all() -> str:
+    holdings = load_holdings()
+    if holdings.empty:
+        return "No holdings to fetch."
+    fetch_for_tickers(holdings["ticker"].tolist())
+    fetch_fx_rates()
+    df = compute_daily_totals()
+    replace_daily_totals(df)
+    st.cache_data.clear()
+    return f"Refreshed {len(holdings)} holdings, {len(df)} total rows."
+
+
+def main() -> None:
+    init_db()
+
+    st.title("📈 Portfolio Tracker")
+    st.caption("US + TW daily prices · holdings × close → daily portfolio value (TWD combined)")
+
+    # Resolve holdings source (upload / session / local file).
+    if not _ensure_holdings_loaded():
+        return
+
+    with st.sidebar:
+        st.divider()
+        st.header("Controls")
+        if st.button("🔄 Refresh prices", use_container_width=True):
+            with st.spinner("Fetching from Yahoo Finance..."):
+                msg = refresh_all()
+            st.success(msg)
+
+        today = date.today()
+        default_start = today - timedelta(days=365)
+        date_range = st.date_input(
+            "Date range",
+            value=(default_start, today),
+            max_value=today,
+        )
+        if isinstance(date_range, tuple) and len(date_range) == 2:
+            start_d, end_d = date_range
+        else:
+            start_d, end_d = default_start, today
+
+        st.divider()
+        st.caption("Holdings stay in your browser session only.")
+
+    holdings = get_holdings()
+    if holdings.empty:
+        st.warning("No holdings loaded. Upload your `holdings.yaml` from the sidebar.")
+        return
+
+    # Auto-fetch prices if the DB is empty (e.g. first run on Streamlit Cloud).
+    _ensure_prices_loaded(holdings["ticker"].tolist())
+
+    start_s = start_d.isoformat()
+    end_s = end_d.isoformat()
+    totals = get_daily_totals(start_s, end_s)
+    prices = get_prices(tuple(holdings["ticker"].tolist()), start_s, end_s)
+    fx = get_fx_rates("USDTWD")
+
+    if totals.empty:
+        st.info("No price data yet. Click **🔄 Refresh prices** in the sidebar to fetch.")
+        return
+
+    totals_twd = attach_twd_value(totals, fx)
+
+    def _pivot_ffill(col: str) -> pd.DataFrame:
+        return (
+            totals_twd.pivot_table(
+                index="date", columns="ticker", values=col, aggfunc="last"
+            )
+            .sort_index()
+            .ffill()
+        )
+
+    twd_pivot = _pivot_ffill("value_twd")
+    native_pivot = _pivot_ffill("value")
+
+    market_map = dict(zip(holdings["ticker"], holdings["market"]))
+    tw_tickers = [t for t, m in market_map.items() if m == "TW" and t in twd_pivot.columns]
+    us_tickers = [t for t, m in market_map.items() if m == "US" and t in twd_pivot.columns]
+
+    def _last_two_with_data(cols: list[str]) -> tuple[str | None, str | None]:
+        if not cols:
+            return None, None
+        sub = totals_twd[totals_twd["ticker"].isin(cols)]
+        dates = sorted(sub["date"].unique())
+        return (
+            dates[-1] if dates else None,
+            dates[-2] if len(dates) >= 2 else None,
+        )
+
+    tw_today_date, tw_prev_date = _last_two_with_data(tw_tickers)
+    us_today_date, us_prev_date = _last_two_with_data(us_tickers)
+
+    def _sum_at(pivot: pd.DataFrame, cols: list[str], date_str: str | None) -> float:
+        if not cols or not date_str or date_str not in pivot.index:
+            return 0.0
+        return float(pivot.loc[date_str, cols].fillna(0).sum())
+
+    tw_today_twd = _sum_at(twd_pivot, tw_tickers, tw_today_date)
+    tw_prev_twd = _sum_at(twd_pivot, tw_tickers, tw_prev_date)
+    us_today_twd = _sum_at(twd_pivot, us_tickers, us_today_date)
+    us_prev_twd = _sum_at(twd_pivot, us_tickers, us_prev_date)
+    us_today_usd = _sum_at(native_pivot, us_tickers, us_today_date)
+    us_prev_usd = _sum_at(native_pivot, us_tickers, us_prev_date)
+
+    combined_today = tw_today_twd + us_today_twd
+    combined_prev = tw_prev_twd + us_prev_twd if (tw_prev_date or us_prev_date) else None
+    combined_delta = (combined_today - combined_prev) if combined_prev else None
+    combined_delta_pct = (combined_delta / combined_prev * 100.0) if combined_prev else None
+
+    fx_today = None
+    fx_prev = None
+    if us_today_date and not fx.empty:
+        fx_on = fx[fx["date"] <= us_today_date]
+        if not fx_on.empty:
+            fx_today = float(fx_on.iloc[-1]["rate"])
+            if len(fx_on) >= 2:
+                fx_prev = float(fx_on.iloc[-2]["rate"])
+
+    st.subheader("Summary")
+    if fx_today:
+        if fx_prev:
+            fx_delta = fx_today - fx_prev
+            fx_pct = fx_delta / fx_prev * 100.0
+            st.caption(
+                f"USD→TWD rate used: **{fx_today:,.4f}**  "
+                f"({fx_delta:+.4f}, {fx_pct:+.2f}%)"
+            )
+        else:
+            st.caption(f"USD→TWD rate used: **{fx_today:,.4f}**")
+
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.metric(
+            label="Combined Total (TWD)",
+            value=f"NT$ {combined_today:,.0f}",
+            delta=(
+                f"{combined_delta:+,.0f}  ({combined_delta_pct:+.2f}%)"
+                if combined_delta is not None and combined_prev
+                else None
+            ),
+        )
+        as_of_combined = max(d for d in [tw_today_date, us_today_date] if d) if (tw_today_date or us_today_date) else "—"
+        st.caption(f"as of {as_of_combined}")
+    with c2:
+        tw_gain_twd = tw_today_twd - tw_prev_twd if tw_prev_twd else 0.0
+        tw_gain_pct = (tw_gain_twd / tw_prev_twd * 100.0) if tw_prev_twd else None
+        st.metric(
+            label="TW stocks (TWD)",
+            value=f"NT$ {tw_today_twd:,.0f}",
+            delta=(
+                f"{tw_gain_twd:+,.0f}  ({tw_gain_pct:+.2f}%)"
+                if tw_gain_pct is not None
+                else None
+            ),
+        )
+        st.caption(f"as of {tw_today_date or '—'}")
+    with c3:
+        us_gain_usd = us_today_usd - us_prev_usd if us_prev_usd else 0.0
+        us_gain_twd = us_today_twd - us_prev_twd if us_prev_twd else 0.0
+        us_gain_pct = (us_gain_usd / us_prev_usd * 100.0) if us_prev_usd else None
+        us_gain_twd_pct = (us_gain_twd / us_prev_twd * 100.0) if us_prev_twd else None
+        st.metric(
+            label="US stocks (USD)",
+            value=f"US$ {us_today_usd:,.2f}",
+            delta=(
+                f"{us_gain_usd:+,.2f}  ({us_gain_pct:+.2f}%)"
+                if us_gain_pct is not None
+                else None
+            ),
+        )
+        st.metric(
+            label="US stocks (TWD equiv.)",
+            value=f"NT$ {us_today_twd:,.0f}",
+            delta=(
+                f"{us_gain_twd:+,.0f}  ({us_gain_twd_pct:+.2f}%)"
+                if us_gain_twd_pct is not None
+                else None
+            ),
+        )
+        st.caption(f"as of {us_today_date or '—'}")
+
+    tab_holdings, tab_history, tab_portfolio = st.tabs(
+        ["Holdings", "Price history", "Daily portfolio total"]
+    )
+
+    with tab_holdings:
+        sorted_t = totals_twd.sort_values(["ticker", "date"]).copy()
+        sorted_t["prev_close"] = sorted_t.groupby("ticker")["close_price"].shift(1)
+        last_prices = (
+            sorted_t.groupby("ticker", as_index=False)
+            .tail(1)[["ticker", "date", "close_price", "prev_close", "fx_rate"]]
+            .rename(columns={"date": "as_of", "close_price": "last_close"})
+        )
+        view = holdings.merge(last_prices, on="ticker", how="left")
+        view["market_value"] = view["last_close"] * view["shares"]
+        view["cost_value"] = view["cost_basis"] * view["shares"]
+        view["unrealized_pl"] = view["market_value"] - view["cost_value"]
+        view["unrealized_pl_pct"] = (
+            (view["last_close"] / view["cost_basis"] - 1.0) * 100.0
+        ).where(view["cost_basis"].notna() & (view["cost_basis"] != 0))
+        view["daily_gain"] = (view["last_close"] - view["prev_close"]) * view["shares"]
+        view["daily_gain_pct"] = (
+            (view["last_close"] / view["prev_close"] - 1.0) * 100.0
+        ).where(view["prev_close"].notna() & (view["prev_close"] != 0))
+        view["daily_gain_twd"] = view.apply(
+            lambda r: r["daily_gain"] if r["currency"] == "TWD"
+            else (r["daily_gain"] * r["fx_rate"]) if pd.notna(r["fx_rate"]) else None,
+            axis=1,
+        )
+        view["market_value_twd"] = view.apply(
+            lambda r: r["market_value"] if r["currency"] == "TWD" else r["market_value"] * (r["fx_rate"] or 0),
+            axis=1,
+        )
+        st.dataframe(
+            view[
+                [
+                    "ticker", "market", "currency", "shares",
+                    "cost_basis", "last_close", "as_of",
+                    "daily_gain", "daily_gain_pct", "daily_gain_twd",
+                    "market_value", "market_value_twd",
+                    "cost_value", "unrealized_pl", "unrealized_pl_pct",
+                ]
+            ],
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "shares": st.column_config.NumberColumn(format="%.2f"),
+                "cost_basis": st.column_config.NumberColumn(format="%.4f"),
+                "last_close": st.column_config.NumberColumn(format="%.2f"),
+                "daily_gain": st.column_config.NumberColumn("daily_gain (native)", format="%,.2f"),
+                "daily_gain_pct": st.column_config.NumberColumn("daily_gain %", format="%+.2f%%"),
+                "daily_gain_twd": st.column_config.NumberColumn("daily_gain (TWD)", format="%,.0f"),
+                "market_value": st.column_config.NumberColumn("market_value (native)", format="%,.2f"),
+                "market_value_twd": st.column_config.NumberColumn("market_value (TWD)", format="%,.0f"),
+                "cost_value": st.column_config.NumberColumn(format="%,.2f"),
+                "unrealized_pl": st.column_config.NumberColumn(format="%,.2f"),
+                "unrealized_pl_pct": st.column_config.NumberColumn(format="%+.2f%%"),
+            },
+        )
+
+        pie_df = view[view["market_value_twd"].notna() & (view["market_value_twd"] > 0)].copy()
+        if not pie_df.empty:
+            pie_df = pie_df.sort_values("market_value_twd", ascending=False)
+            total_twd = pie_df["market_value_twd"].sum()
+            col_a, col_b = st.columns([1, 1])
+            with col_a:
+                fig_pie = px.pie(
+                    pie_df,
+                    names="ticker",
+                    values="market_value_twd",
+                    title=f"Holdings allocation by ticker (TWD)  ·  Total NT$ {total_twd:,.0f}",
+                    hole=0.45,
+                )
+                fig_pie.update_traces(
+                    textposition="outside",
+                    textinfo="label+percent",
+                    hovertemplate="<b>%{label}</b><br>NT$ %{value:,.0f}<br>%{percent}<extra></extra>",
+                )
+                fig_pie.update_layout(height=420, showlegend=True)
+                st.plotly_chart(fig_pie, use_container_width=True)
+            with col_b:
+                market_pie = (
+                    pie_df.groupby("market", as_index=False)["market_value_twd"].sum()
+                )
+                fig_pie_mkt = px.pie(
+                    market_pie,
+                    names="market",
+                    values="market_value_twd",
+                    title="Holdings allocation by market (TWD)",
+                    hole=0.45,
+                    color="market",
+                    color_discrete_map={"TW": "#1f77b4", "US": "#d62728"},
+                )
+                fig_pie_mkt.update_traces(
+                    textposition="outside",
+                    textinfo="label+percent",
+                    hovertemplate="<b>%{label}</b><br>NT$ %{value:,.0f}<br>%{percent}<extra></extra>",
+                )
+                fig_pie_mkt.update_layout(height=420, showlegend=True)
+                st.plotly_chart(fig_pie_mkt, use_container_width=True)
+
+    with tab_history:
+        if prices.empty:
+            st.info("No price history in this date range.")
+        else:
+            chosen = st.multiselect(
+                "Tickers",
+                options=sorted(prices["ticker"].unique()),
+                default=sorted(prices["ticker"].unique()),
+            )
+            sub = prices[prices["ticker"].isin(chosen)]
+            sub = sub[sub["close"].notna() & (sub["close"] > 0)]
+            if sub.empty:
+                st.info("Pick at least one ticker.")
+            else:
+                fig = px.line(
+                    sub,
+                    x="date",
+                    y="close",
+                    color="ticker",
+                    title="Daily close price (native currency)",
+                )
+                fig.update_layout(hovermode="x unified", height=500)
+                fig.update_yaxes(rangemode="tozero")
+                st.plotly_chart(fig, use_container_width=True)
+
+    with tab_portfolio:
+        ffill_twd = _ffill_pivot(totals_twd)
+        combined = combined_twd_series(totals_twd)
+        if not combined.empty:
+            st.subheader("Portfolio performance")
+            combined_sorted = combined.sort_values("date").reset_index(drop=True)
+            combined_sorted["date_dt"] = pd.to_datetime(combined_sorted["date"])
+            latest_dt = combined_sorted["date_dt"].max()
+            latest_val = float(combined_sorted.iloc[-1]["value_twd"])
+
+            periods = [
+                ("1D", pd.Timedelta(days=1)),
+                ("1W", pd.Timedelta(days=7)),
+                ("1M", pd.DateOffset(months=1)),
+                ("3M", pd.DateOffset(months=3)),
+                ("6M", pd.DateOffset(months=6)),
+                ("9M", pd.DateOffset(months=9)),
+                ("1Y", pd.DateOffset(years=1)),
+            ]
+
+            perf_cols = st.columns(len(periods))
+            for col, (label, offset) in zip(perf_cols, periods):
+                target = latest_dt - offset
+                past = combined_sorted[combined_sorted["date_dt"] <= target]
+                with col:
+                    if past.empty:
+                        st.metric(label=label, value="N/A")
+                    else:
+                        past_val = float(past.iloc[-1]["value_twd"])
+                        delta = latest_val - past_val
+                        delta_pct = (delta / past_val * 100.0) if past_val > 0 else 0.0
+                        st.metric(
+                            label=label,
+                            value=f"{delta:+,.0f}",
+                            delta=f"{delta_pct:+.2f}%",
+                        )
+
+            st.divider()
+
+            fig0 = px.line(
+                combined,
+                x="date",
+                y="value_twd",
+                title="Daily combined portfolio value (TWD equivalent)",
+            )
+            fig0.update_layout(hovermode="x unified", height=380, yaxis_title="Value (TWD)")
+            fig0.update_yaxes(rangemode="tozero")
+            st.plotly_chart(fig0, use_container_width=True)
+
+            col1, col2 = st.columns([3, 1])
+            with col2:
+                gain_view = st.radio(
+                    "Gain view",
+                    ["Total", "By Stock"],
+                    horizontal=True,
+                    label_visibility="collapsed"
+                )
+
+            if gain_view == "Total":
+                gain = combined.copy()
+                gain["gain_twd"] = gain["value_twd"].diff()
+                gain["gain_pct"] = gain["value_twd"].pct_change() * 100.0
+                gain = gain.dropna(subset=["gain_twd"])
+                if not gain.empty:
+                    colors = ["#16a34a" if v >= 0 else "#dc2626" for v in gain["gain_twd"]]
+                    fig_gain = make_subplots(specs=[[{"secondary_y": True}]])
+                    fig_gain.add_trace(
+                        go.Bar(
+                            x=gain["date"],
+                            y=gain["gain_twd"],
+                            marker_color=colors,
+                            name="Gain (TWD)",
+                            hovertemplate="%{x}<br>Gain: %{y:,.0f} TWD<extra></extra>",
+                        ),
+                        secondary_y=False,
+                    )
+                    fig_gain.add_trace(
+                        go.Scatter(
+                            x=gain["date"],
+                            y=gain["gain_pct"],
+                            mode="lines",
+                            name="Gain %",
+                            line=dict(color="#1f77b4", width=1.5),
+                            hovertemplate="%{x}<br>Gain: %{y:+.2f}%<extra></extra>",
+                        ),
+                        secondary_y=True,
+                    )
+                    fig_gain.update_layout(
+                        title="Daily portfolio gain (TWD and %)",
+                        hovermode="x unified",
+                        height=380,
+                        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                    )
+                    fig_gain.update_yaxes(title_text="Gain (TWD)", secondary_y=False)
+                    fig_gain.update_yaxes(title_text="Gain (%)", secondary_y=True)
+                    st.plotly_chart(fig_gain, use_container_width=True)
+            else:
+                stock_gains = []
+                for ticker in ffill_twd.columns:
+                    ticker_data = ffill_twd[[ticker]].copy()
+                    ticker_data.columns = ["value_twd"]
+                    ticker_data["ticker"] = ticker
+                    ticker_data["date"] = ticker_data.index
+                    ticker_data["gain_twd"] = ticker_data["value_twd"].diff()
+                    ticker_data["gain_pct"] = ticker_data["value_twd"].pct_change() * 100.0
+                    ticker_data = ticker_data.dropna(subset=["gain_twd"])
+                    stock_gains.append(ticker_data)
+
+                if stock_gains:
+                    stock_gain_df = pd.concat(stock_gains, ignore_index=True)
+                    stock_gain_df["date"] = pd.to_datetime(stock_gain_df["date"])
+
+                    range_choice = st.radio(
+                        "Range",
+                        options=["1W", "1M", "3M", "6M", "1Y", "All"],
+                        index=1,
+                        horizontal=True,
+                        label_visibility="collapsed",
+                        key="stock_gain_range",
+                    )
+
+                    max_date = stock_gain_df["date"].max()
+                    if range_choice == "1W":
+                        cutoff = max_date - pd.Timedelta(days=7)
+                    elif range_choice == "1M":
+                        cutoff = max_date - pd.DateOffset(months=1)
+                    elif range_choice == "3M":
+                        cutoff = max_date - pd.DateOffset(months=3)
+                    elif range_choice == "6M":
+                        cutoff = max_date - pd.DateOffset(months=6)
+                    elif range_choice == "1Y":
+                        cutoff = max_date - pd.DateOffset(years=1)
+                    else:
+                        cutoff = stock_gain_df["date"].min()
+
+                    filtered = stock_gain_df[stock_gain_df["date"] >= cutoff].copy()
+
+                    def _fmt_gain(v: float) -> str:
+                        color = "#16a34a" if v >= 0 else "#dc2626"
+                        return f"<span style='color:{color}'>{v:+,.0f}</span>"
+
+                    palette = px.colors.qualitative.Plotly
+                    tickers_sorted = sorted(filtered["ticker"].unique())
+                    color_map = {t: palette[i % len(palette)] for i, t in enumerate(tickers_sorted)}
+
+                    fig_stock_gain = go.Figure()
+                    for ticker in tickers_sorted:
+                        tdf = filtered[filtered["ticker"] == ticker].sort_values("date")
+                        formatted = tdf["gain_twd"].apply(_fmt_gain).values
+                        fig_stock_gain.add_trace(
+                            go.Bar(
+                                x=tdf["date"],
+                                y=tdf["gain_twd"],
+                                name=ticker,
+                                marker_color=color_map[ticker],
+                                customdata=formatted.reshape(-1, 1),
+                                hovertemplate=f"{ticker}: %{{customdata[0]}}<extra></extra>",
+                            )
+                        )
+
+                    daily_total = filtered.groupby("date")["gain_twd"].sum().reset_index()
+                    daily_total["formatted"] = daily_total["gain_twd"].apply(_fmt_gain)
+                    fig_stock_gain.add_trace(
+                        go.Scatter(
+                            x=daily_total["date"],
+                            y=[0] * len(daily_total),
+                            mode="markers",
+                            marker=dict(opacity=0, size=0.1),
+                            showlegend=False,
+                            customdata=daily_total["formatted"].values.reshape(-1, 1),
+                            hovertemplate="<b>Total: %{customdata[0]}</b><extra></extra>",
+                            hoverinfo="text",
+                        )
+                    )
+
+                    fig_stock_gain.update_layout(
+                        title=f"Daily gain by stock — {range_choice} (TWD)",
+                        hovermode="x unified",
+                        height=760,
+                        yaxis_title="Gain (TWD)",
+                        barmode="group",
+                        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                    )
+                    fig_stock_gain.update_yaxes(autorange=True)
+                    st.plotly_chart(
+                        fig_stock_gain,
+                        use_container_width=True,
+                        config={"displaylogo": False},
+                    )
+
+        market_map = dict(zip(holdings["ticker"], holdings["market"]))
+        rows = []
+        for mkt in sorted(set(market_map.values())):
+            cols = [t for t, m in market_map.items() if m == mkt and t in ffill_twd.columns]
+            if not cols:
+                continue
+            sub = ffill_twd[cols].sum(axis=1)
+            for d, v in sub.items():
+                if v > 0:
+                    rows.append({"date": d, "market": mkt, "value_twd": v})
+        per_day_market = pd.DataFrame(rows).sort_values("date") if rows else pd.DataFrame()
+        if not per_day_market.empty:
+            fig1 = px.line(
+                per_day_market,
+                x="date",
+                y="value_twd",
+                color="market",
+                title="Daily portfolio total — TW vs US (both in TWD)",
+            )
+            fig1.update_layout(hovermode="x unified", height=380, yaxis_title="Value (TWD)")
+            fig1.update_yaxes(rangemode="tozero")
+            st.plotly_chart(fig1, use_container_width=True)
+
+        stacked = stacked_twd_long(totals_twd)
+        if not stacked.empty:
+            fig2 = px.area(
+                stacked,
+                x="date",
+                y="value_twd",
+                color="ticker",
+                line_group="ticker",
+                title="Daily value contribution by ticker (stacked, TWD)",
+            )
+            fig2.update_layout(hovermode="x unified", height=500)
+            fig2.update_yaxes(rangemode="tozero")
+            st.plotly_chart(fig2, use_container_width=True)
+
+
+if __name__ == "__main__":
+    main()
