@@ -166,11 +166,13 @@ def _ensure_holdings_loaded() -> bool:
             st.info("👆 Paste your YAML in the **Paste** tab and click **Apply**.")
             return False
 
-        # Sync to DB only if holdings actually changed (avoid clearing cache every rerun)
+        # Sync + recompute only if holdings actually changed (signature includes
+        # ticker and shares so changes to either trigger a recompute).
         rows_sig = repr(sorted([(r.get("ticker"), r.get("shares")) for r in rows]))
         if st.session_state.get("holdings_sig") != rows_sig:
             sync_holdings_from_rows(rows)
             st.session_state["holdings_sig"] = rows_sig
+            st.session_state["holdings_changed"] = True
             get_holdings.clear()
 
         st.caption(f"Source: {source} · {len(rows)} tickers")
@@ -178,22 +180,40 @@ def _ensure_holdings_loaded() -> bool:
 
 
 def _ensure_prices_loaded(tickers: list[str]) -> None:
-    """If the DB has no daily_totals for these tickers, auto-fetch from yfinance.
-    Cached so we don't refetch on every rerun within the cache window.
-    """
-    totals = load_daily_totals()
-    have_data = not totals.empty and set(tickers).issubset(set(totals["ticker"].unique()))
-    if have_data:
-        return
+    """Make sure prices and daily_totals match the current holdings.
 
-    with st.spinner("Fetching prices from Yahoo Finance (first time, ~30s)..."):
-        fetch_for_tickers(tickers)
-        fetch_fx_rates()
-        df = compute_daily_totals()
-        replace_daily_totals(df)
-        get_prices.clear()
-        get_daily_totals.clear()
-        get_fx_rates.clear()
+    1. Fetch yfinance data for any ticker that has no prices in the DB.
+    2. Recompute daily_totals if (a) holdings changed since last run, or
+       (b) any ticker was missing prices. This wipes stale rows for
+       previously-held tickers and updates `shares` to current values.
+    """
+    needs_recompute = st.session_state.pop("holdings_changed", False)
+
+    prices_df = load_prices(tickers=tickers)
+    have_tickers = set(prices_df["ticker"].unique()) if not prices_df.empty else set()
+    missing = [t for t in tickers if t not in have_tickers]
+
+    if missing:
+        needs_recompute = True
+        with st.spinner(f"Fetching prices for {len(missing)} ticker(s) from Yahoo Finance..."):
+            fetch_for_tickers(missing)
+            fetch_fx_rates()
+
+    # Also recompute if daily_totals has tickers not in current holdings
+    # (left over from a previous holdings set).
+    totals = load_daily_totals()
+    if not totals.empty:
+        stale_tickers = set(totals["ticker"].unique()) - set(tickers)
+        if stale_tickers:
+            needs_recompute = True
+
+    if needs_recompute:
+        with st.spinner("Recomputing daily totals..."):
+            df = compute_daily_totals()
+            replace_daily_totals(df)
+            get_prices.clear()
+            get_daily_totals.clear()
+            get_fx_rates.clear()
 
 
 def attach_twd_value(totals: pd.DataFrame, fx: pd.DataFrame) -> pd.DataFrame:

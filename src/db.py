@@ -53,8 +53,16 @@ CREATE INDEX IF NOT EXISTS idx_fx_rates_date ON fx_rates(date);
 """
 
 
+def _resolve(db_path: Path | None) -> Path:
+    """Pick the effective DB path. Reading the module-level DB_PATH at call
+    time (instead of as a default arg) lets tests monkeypatch it.
+    """
+    return db_path if db_path is not None else DB_PATH
+
+
 @contextmanager
-def connect(db_path: Path = DB_PATH):
+def connect(db_path: Path | None = None):
+    db_path = _resolve(db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
@@ -65,12 +73,12 @@ def connect(db_path: Path = DB_PATH):
         conn.close()
 
 
-def init_db(db_path: Path = DB_PATH) -> None:
+def init_db(db_path: Path | None = None) -> None:
     with connect(db_path) as conn:
         conn.executescript(SCHEMA)
 
 
-def upsert_holdings(rows: Iterable[dict], db_path: Path = DB_PATH) -> int:
+def upsert_holdings(rows: Iterable[dict], db_path: Path | None = None) -> int:
     sql = """
     INSERT INTO holdings (ticker, market, shares, cost_basis, currency)
     VALUES (:ticker, :market, :shares, :cost_basis, :currency)
@@ -86,7 +94,7 @@ def upsert_holdings(rows: Iterable[dict], db_path: Path = DB_PATH) -> int:
     return len(rows)
 
 
-def replace_holdings(rows: Iterable[dict], db_path: Path = DB_PATH) -> int:
+def replace_holdings(rows: Iterable[dict], db_path: Path | None = None) -> int:
     """Replace the holdings table to mirror the YAML exactly."""
     rows = list(rows)
     with connect(db_path) as conn:
@@ -99,7 +107,7 @@ def replace_holdings(rows: Iterable[dict], db_path: Path = DB_PATH) -> int:
     return len(rows)
 
 
-def upsert_prices(df: pd.DataFrame, db_path: Path = DB_PATH) -> int:
+def upsert_prices(df: pd.DataFrame, db_path: Path | None = None) -> int:
     """df columns: ticker, date (YYYY-MM-DD str), open, high, low, close, volume"""
     if df.empty:
         return 0
@@ -119,7 +127,7 @@ def upsert_prices(df: pd.DataFrame, db_path: Path = DB_PATH) -> int:
     return len(df)
 
 
-def upsert_daily_totals(df: pd.DataFrame, db_path: Path = DB_PATH) -> int:
+def upsert_daily_totals(df: pd.DataFrame, db_path: Path | None = None) -> int:
     if df.empty:
         return 0
     sql = """
@@ -137,7 +145,7 @@ def upsert_daily_totals(df: pd.DataFrame, db_path: Path = DB_PATH) -> int:
     return len(df)
 
 
-def replace_daily_totals(df: pd.DataFrame, db_path: Path = DB_PATH) -> int:
+def replace_daily_totals(df: pd.DataFrame, db_path: Path | None = None) -> int:
     """Wipe and rewrite daily_totals so removed holdings stop contributing."""
     with connect(db_path) as conn:
         conn.execute("DELETE FROM daily_totals")
@@ -152,7 +160,7 @@ def replace_daily_totals(df: pd.DataFrame, db_path: Path = DB_PATH) -> int:
     return len(df)
 
 
-def load_holdings(db_path: Path = DB_PATH) -> pd.DataFrame:
+def load_holdings(db_path: Path | None = None) -> pd.DataFrame:
     with connect(db_path) as conn:
         return pd.read_sql("SELECT * FROM holdings ORDER BY market, ticker", conn)
 
@@ -161,7 +169,7 @@ def load_prices(
     tickers: list[str] | None = None,
     start: str | None = None,
     end: str | None = None,
-    db_path: Path = DB_PATH,
+    db_path: Path | None = None,
 ) -> pd.DataFrame:
     sql = "SELECT * FROM prices WHERE 1=1"
     params: list = []
@@ -183,7 +191,7 @@ def load_prices(
 def load_daily_totals(
     start: str | None = None,
     end: str | None = None,
-    db_path: Path = DB_PATH,
+    db_path: Path | None = None,
 ) -> pd.DataFrame:
     sql = "SELECT * FROM daily_totals WHERE 1=1"
     params: list = []
@@ -198,7 +206,7 @@ def load_daily_totals(
         return pd.read_sql(sql, conn, params=params)
 
 
-def latest_price_date(ticker: str, db_path: Path = DB_PATH) -> str | None:
+def latest_price_date(ticker: str, db_path: Path | None = None) -> str | None:
     with connect(db_path) as conn:
         row = conn.execute(
             "SELECT MAX(date) AS d FROM prices WHERE ticker = ?", (ticker,)
@@ -206,7 +214,7 @@ def latest_price_date(ticker: str, db_path: Path = DB_PATH) -> str | None:
     return row["d"] if row and row["d"] else None
 
 
-def upsert_fx_rates(df: pd.DataFrame, db_path: Path = DB_PATH) -> int:
+def upsert_fx_rates(df: pd.DataFrame, db_path: Path | None = None) -> int:
     """df columns: pair, date, rate"""
     if df.empty:
         return 0
@@ -225,7 +233,7 @@ def load_fx_rates(
     pair: str | None = None,
     start: str | None = None,
     end: str | None = None,
-    db_path: Path = DB_PATH,
+    db_path: Path | None = None,
 ) -> pd.DataFrame:
     sql = "SELECT * FROM fx_rates WHERE 1=1"
     params: list = []
@@ -243,7 +251,7 @@ def load_fx_rates(
         return pd.read_sql(sql, conn, params=params)
 
 
-def latest_fx_date(pair: str, db_path: Path = DB_PATH) -> str | None:
+def latest_fx_date(pair: str, db_path: Path | None = None) -> str | None:
     with connect(db_path) as conn:
         row = conn.execute(
             "SELECT MAX(date) AS d FROM fx_rates WHERE pair = ?", (pair,)
