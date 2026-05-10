@@ -320,42 +320,41 @@ def main() -> None:
     st.title("📈 Portfolio Tracker")
     st.caption("US + TW daily prices · holdings × close → daily portfolio value (TWD combined)")
 
-    # Quick check: do we already have holdings (from session or local YAML)?
-    # Used to decide whether to render the Controls block at the sidebar top.
-    has_holdings = (
-        "holdings_rows" in st.session_state
-        or LOCAL_HOLDINGS_PATH.exists()
-    )
+    # Reserve a slot at the very top of the sidebar for the Controls block.
+    # We populate it AFTER _ensure_holdings_loaded() runs so we know whether
+    # holdings exist (after a fresh Apply click, the session state is only
+    # updated mid-run inside that helper).
+    with st.sidebar:
+        controls_slot = st.empty()
 
-    today = date.today()
-    default_start = today - timedelta(days=365)
-    start_d, end_d = default_start, today
-
-    # Top of sidebar: Controls (Refresh + Date range), only useful when holdings exist
-    if has_holdings:
-        with st.sidebar:
-            st.header("Controls")
-            if st.button("🔄 Refresh prices", use_container_width=True):
-                with st.spinner("Fetching from Yahoo Finance..."):
-                    msg = refresh_all()
-                st.success(msg)
-
-            date_range = st.date_input(
-                "Date range",
-                value=(default_start, today),
-                max_value=today,
-            )
-            if isinstance(date_range, tuple) and len(date_range) == 2:
-                start_d, end_d = date_range
-
-            st.divider()
-
-    # Holdings input renders BELOW the controls (or at top if first-time)
+    # Holdings input renders below the reserved slot.
     if not _ensure_holdings_loaded():
         return
 
     with st.sidebar:
         st.caption("Holdings stay in your browser session only.")
+
+    today = date.today()
+    default_start = today - timedelta(days=365)
+    start_d, end_d = default_start, today
+
+    # Now fill the reserved slot at the top — holdings exist at this point.
+    with controls_slot.container():
+        st.header("Controls")
+        if st.button("🔄 Refresh prices", use_container_width=True):
+            with st.spinner("Fetching from Yahoo Finance..."):
+                msg = refresh_all()
+            st.success(msg)
+
+        date_range = st.date_input(
+            "Date range",
+            value=(default_start, today),
+            max_value=today,
+        )
+        if isinstance(date_range, tuple) and len(date_range) == 2:
+            start_d, end_d = date_range
+
+        st.divider()
 
     holdings = get_holdings()
     if holdings.empty:
