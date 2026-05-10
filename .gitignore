@@ -12,3 +12,6 @@ config/holdings.yaml
 
 # Bundled tools (not source code)
 tools/
+
+# Test/build artifacts
+.pytest_cache/
