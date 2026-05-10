@@ -91,16 +91,26 @@ def _ensure_holdings_loaded() -> bool:
         tab_paste, tab_upload = st.tabs(["📋 Paste", "📁 Upload"])
 
         with tab_paste:
+            st.caption("Template (tap the copy icon → paste below → edit values):")
+            st.code(TEMPLATE_YAML, language="yaml")
+
             current_text = st.session_state.get("holdings_text", "")
             text = st.text_area(
                 "Paste your YAML here",
                 value=current_text,
                 height=220,
-                placeholder=TEMPLATE_YAML,
                 help="Works on any device including iOS / Android browsers.",
                 key="holdings_text_input",
             )
-            apply_paste = st.button("Apply pasted YAML", use_container_width=True)
+
+            col_apply, col_load = st.columns(2)
+            with col_apply:
+                apply_paste = st.button("Apply", use_container_width=True, type="primary")
+            with col_load:
+                if st.button("Load template", use_container_width=True):
+                    st.session_state["holdings_text"] = TEMPLATE_YAML
+                    st.rerun()
+
             if apply_paste and text.strip():
                 try:
                     rows = parse_holdings_yaml(text)
@@ -153,9 +163,7 @@ def _ensure_holdings_loaded() -> bool:
                 return False
 
         if not rows:
-            st.info("👆 Paste or upload your YAML to get started.")
-            with st.expander("Show template"):
-                st.code(TEMPLATE_YAML, language="yaml")
+            st.info("👆 Paste your YAML in the **Paste** tab and click **Apply**.")
             return False
 
         # Sync to DB only if holdings actually changed (avoid clearing cache every rerun)
