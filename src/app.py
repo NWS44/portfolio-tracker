@@ -94,10 +94,8 @@ def _ensure_holdings_loaded() -> bool:
             st.caption("Template (tap the copy icon → paste below → edit values):")
             st.code(TEMPLATE_YAML, language="yaml")
 
-            current_text = st.session_state.get("holdings_text", "")
             text = st.text_area(
                 "Paste your YAML here",
-                value=current_text,
                 height=220,
                 help="Works on any device including iOS / Android browsers.",
                 key="holdings_text_input",
@@ -107,9 +105,14 @@ def _ensure_holdings_loaded() -> bool:
             with col_apply:
                 apply_paste = st.button("Apply", use_container_width=True, type="primary")
             with col_load:
-                if st.button("Load template", use_container_width=True):
-                    st.session_state["holdings_text"] = TEMPLATE_YAML
-                    st.rerun()
+                # Use on_click so the callback runs BEFORE the next rerun renders
+                # the textarea widget; setting session_state in the same run
+                # would conflict with the already-rendered widget.
+                st.button(
+                    "Load template",
+                    use_container_width=True,
+                    on_click=lambda: st.session_state.update(holdings_text_input=TEMPLATE_YAML),
+                )
 
             if apply_paste and text.strip():
                 try:
@@ -119,7 +122,6 @@ def _ensure_holdings_loaded() -> bool:
                         rows = None
                     else:
                         st.session_state["holdings_rows"] = rows
-                        st.session_state["holdings_text"] = text
                         source = "pasted"
                 except Exception as e:
                     st.error(f"Could not parse YAML: {e}")
@@ -318,31 +320,41 @@ def main() -> None:
     st.title("📈 Portfolio Tracker")
     st.caption("US + TW daily prices · holdings × close → daily portfolio value (TWD combined)")
 
-    # Resolve holdings source (upload / session / local file).
+    # Quick check: do we already have holdings (from session or local YAML)?
+    # Used to decide whether to render the Controls block at the sidebar top.
+    has_holdings = (
+        "holdings_rows" in st.session_state
+        or LOCAL_HOLDINGS_PATH.exists()
+    )
+
+    today = date.today()
+    default_start = today - timedelta(days=365)
+    start_d, end_d = default_start, today
+
+    # Top of sidebar: Controls (Refresh + Date range), only useful when holdings exist
+    if has_holdings:
+        with st.sidebar:
+            st.header("Controls")
+            if st.button("🔄 Refresh prices", use_container_width=True):
+                with st.spinner("Fetching from Yahoo Finance..."):
+                    msg = refresh_all()
+                st.success(msg)
+
+            date_range = st.date_input(
+                "Date range",
+                value=(default_start, today),
+                max_value=today,
+            )
+            if isinstance(date_range, tuple) and len(date_range) == 2:
+                start_d, end_d = date_range
+
+            st.divider()
+
+    # Holdings input renders BELOW the controls (or at top if first-time)
     if not _ensure_holdings_loaded():
         return
 
     with st.sidebar:
-        st.divider()
-        st.header("Controls")
-        if st.button("🔄 Refresh prices", use_container_width=True):
-            with st.spinner("Fetching from Yahoo Finance..."):
-                msg = refresh_all()
-            st.success(msg)
-
-        today = date.today()
-        default_start = today - timedelta(days=365)
-        date_range = st.date_input(
-            "Date range",
-            value=(default_start, today),
-            max_value=today,
-        )
-        if isinstance(date_range, tuple) and len(date_range) == 2:
-            start_d, end_d = date_range
-        else:
-            start_d, end_d = default_start, today
-
-        st.divider()
         st.caption("Holdings stay in your browser session only.")
 
     holdings = get_holdings()
