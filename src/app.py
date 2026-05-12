@@ -314,8 +314,35 @@ def refresh_all() -> str:
     return f"Refreshed {len(holdings)} holdings, {len(df)} total rows."
 
 
+def _wipe_all_holdings_data() -> None:
+    """Clear everything tied to the user's holdings: session state, DB tables,
+    and the in-memory cache. Used by the explicit Clear button and by the
+    fresh-page-load guard so refreshes leave no traces.
+    """
+    for key in (
+        "holdings_rows",
+        "holdings_sig",
+        "holdings_text_input",
+        "holdings_changed",
+    ):
+        st.session_state.pop(key, None)
+    replace_holdings([])
+    replace_daily_totals(pd.DataFrame())
+    st.cache_data.clear()
+
+
 def main() -> None:
     init_db()
+
+    # Fresh-page-load guard: F5 / new tab → empty session_state. The DB,
+    # however, persists for the container's lifetime on Streamlit Cloud,
+    # so a prior visitor's holdings would otherwise leak into the next run.
+    # If we don't have the marker AND we're not running with a local YAML,
+    # wipe any stale data from the DB before rendering.
+    if "session_started" not in st.session_state:
+        st.session_state["session_started"] = True
+        if not LOCAL_HOLDINGS_PATH.exists():
+            _wipe_all_holdings_data()
 
     st.title("📈 Portfolio Tracker")
     st.caption("US + TW daily prices · holdings × close → daily portfolio value (TWD combined)")
@@ -345,6 +372,10 @@ def main() -> None:
             with st.spinner("Fetching from Yahoo Finance..."):
                 msg = refresh_all()
             st.success(msg)
+
+        if st.button("🗑️ Clear holdings", use_container_width=True, type="secondary"):
+            _wipe_all_holdings_data()
+            st.rerun()
 
         date_range = st.date_input(
             "Date range",
