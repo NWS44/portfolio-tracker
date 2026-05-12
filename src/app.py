@@ -683,38 +683,67 @@ def main() -> None:
                 gain["gain_pct"] = gain["value_twd"].pct_change() * 100.0
                 gain = gain.dropna(subset=["gain_twd"])
                 if not gain.empty:
-                    colors = ["#16a34a" if v >= 0 else "#dc2626" for v in gain["gain_twd"]]
+                    gain["date"] = pd.to_datetime(gain["date"])
+
+                    range_choice_total = st.radio(
+                        "Range (total)",
+                        options=["1W", "1M", "3M", "6M", "1Y", "All"],
+                        index=1,
+                        horizontal=True,
+                        label_visibility="collapsed",
+                        key="total_gain_range",
+                    )
+
+                    max_date_total = gain["date"].max()
+                    if range_choice_total == "1W":
+                        cutoff_total = max_date_total - pd.Timedelta(days=7)
+                    elif range_choice_total == "1M":
+                        cutoff_total = max_date_total - pd.DateOffset(months=1)
+                    elif range_choice_total == "3M":
+                        cutoff_total = max_date_total - pd.DateOffset(months=3)
+                    elif range_choice_total == "6M":
+                        cutoff_total = max_date_total - pd.DateOffset(months=6)
+                    elif range_choice_total == "1Y":
+                        cutoff_total = max_date_total - pd.DateOffset(years=1)
+                    else:
+                        cutoff_total = gain["date"].min()
+
+                    gain_filtered = gain[gain["date"] >= cutoff_total]
+
+                    colors = ["#16a34a" if v >= 0 else "#dc2626" for v in gain_filtered["gain_twd"]]
                     fig_gain = make_subplots(specs=[[{"secondary_y": True}]])
                     fig_gain.add_trace(
                         go.Bar(
-                            x=gain["date"],
-                            y=gain["gain_twd"],
+                            x=gain_filtered["date"],
+                            y=gain_filtered["gain_twd"],
                             marker_color=colors,
                             name="Gain (TWD)",
-                            hovertemplate="%{x}<br>Gain: %{y:,.0f} TWD<extra></extra>",
+                            hovertemplate="%{x|%Y-%m-%d}<br>Gain: %{y:,.0f} TWD<extra></extra>",
                         ),
                         secondary_y=False,
                     )
                     fig_gain.add_trace(
                         go.Scatter(
-                            x=gain["date"],
-                            y=gain["gain_pct"],
+                            x=gain_filtered["date"],
+                            y=gain_filtered["gain_pct"],
                             mode="lines",
                             name="Gain %",
                             line=dict(color="#1f77b4", width=1.5),
-                            hovertemplate="%{x}<br>Gain: %{y:+.2f}%<extra></extra>",
+                            hovertemplate="%{x|%Y-%m-%d}<br>Gain: %{y:+.2f}%<extra></extra>",
                         ),
                         secondary_y=True,
                     )
                     fig_gain.update_layout(
-                        title="Daily portfolio gain (TWD and %)",
+                        title=f"Daily portfolio gain — {range_choice_total} (TWD and %)",
                         hovermode="x unified",
                         height=380,
                         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
                     )
-                    fig_gain.update_yaxes(title_text="Gain (TWD)", secondary_y=False)
-                    fig_gain.update_yaxes(title_text="Gain (%)", secondary_y=True)
-                    st.plotly_chart(fig_gain, use_container_width=True)
+                    # autorange=True ensures both y-axes auto-fit to the
+                    # filtered data (no leftover range from previous window).
+                    fig_gain.update_yaxes(title_text="Gain (TWD)", secondary_y=False, autorange=True)
+                    fig_gain.update_yaxes(title_text="Gain (%)", secondary_y=True, autorange=True)
+                    st.plotly_chart(fig_gain, use_container_width=True, config={"displaylogo": False})
             else:
                 stock_gains = []
                 for ticker in ffill_twd.columns:
