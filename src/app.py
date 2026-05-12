@@ -152,10 +152,28 @@ def _ensure_holdings_loaded() -> bool:
                     st.error(f"Could not parse uploaded file: {e}")
                     return False
 
-        # Fall back to existing session, then local dev file
+        # Fall back to existing session, then the DB (persists across F5
+        # because Streamlit Cloud keeps the container's filesystem alive),
+        # then the local dev YAML.
         if rows is None and "holdings_rows" in st.session_state:
             rows = st.session_state["holdings_rows"]
             source = "session (loaded earlier)"
+        if rows is None:
+            db_holdings = load_holdings()
+            if not db_holdings.empty:
+                rows = [
+                    {
+                        "ticker": r["ticker"],
+                        "market": r["market"],
+                        "shares": r["shares"],
+                        "cost_basis": r["cost_basis"],
+                        "currency": r["currency"],
+                    }
+                    for _, r in db_holdings.iterrows()
+                ]
+                # Cache back into session_state so subsequent checks short-circuit
+                st.session_state["holdings_rows"] = rows
+                source = "database (from previous visit)"
         if rows is None and LOCAL_HOLDINGS_PATH.exists():
             try:
                 with open(LOCAL_HOLDINGS_PATH, "r", encoding="utf-8") as f:
