@@ -22,6 +22,7 @@ from db import (  # noqa: E402
     load_holdings,
     load_prices,
     replace_daily_totals,
+    replace_holdings,
 )
 from fetch_prices import (  # noqa: E402
     fetch_for_tickers,
