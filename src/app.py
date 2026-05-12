@@ -335,16 +335,6 @@ def _wipe_all_holdings_data() -> None:
 def main() -> None:
     init_db()
 
-    # Fresh-page-load guard: F5 / new tab → empty session_state. The DB,
-    # however, persists for the container's lifetime on Streamlit Cloud,
-    # so a prior visitor's holdings would otherwise leak into the next run.
-    # If we don't have the marker AND we're not running with a local YAML,
-    # wipe any stale data from the DB before rendering.
-    if "session_started" not in st.session_state:
-        st.session_state["session_started"] = True
-        if not LOCAL_HOLDINGS_PATH.exists():
-            _wipe_all_holdings_data()
-
     st.title("📈 Portfolio Tracker")
     st.caption("US + TW daily prices · holdings × close → daily portfolio value (TWD combined)")
 
