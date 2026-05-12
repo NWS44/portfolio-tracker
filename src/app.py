@@ -668,14 +668,42 @@ def main() -> None:
             fig0.update_yaxes(rangemode="tozero")
             st.plotly_chart(fig0, use_container_width=True)
 
-            col1, col2 = st.columns([3, 1])
-            with col2:
+            # Shared controls row: range selector (left) + view toggle (right).
+            # The same range filters both Total and By Stock views so the user
+            # only chooses the window once.
+            col_range, col_view = st.columns([2, 1])
+            with col_range:
+                st.caption("Range")
+                range_choice = st.radio(
+                    "Range",
+                    options=["1W", "1M", "3M", "6M", "1Y", "All"],
+                    index=1,
+                    horizontal=True,
+                    label_visibility="collapsed",
+                    key="gain_range",
+                )
+            with col_view:
+                st.caption("View")
                 gain_view = st.radio(
                     "Gain view",
                     ["Total", "By Stock"],
                     horizontal=True,
-                    label_visibility="collapsed"
+                    label_visibility="collapsed",
+                    key="gain_view",
                 )
+
+            def _cutoff(max_date, choice):
+                if choice == "1W":
+                    return max_date - pd.Timedelta(days=7)
+                if choice == "1M":
+                    return max_date - pd.DateOffset(months=1)
+                if choice == "3M":
+                    return max_date - pd.DateOffset(months=3)
+                if choice == "6M":
+                    return max_date - pd.DateOffset(months=6)
+                if choice == "1Y":
+                    return max_date - pd.DateOffset(years=1)
+                return None  # "All"
 
             if gain_view == "Total":
                 gain = combined.copy()
@@ -685,30 +713,8 @@ def main() -> None:
                 if not gain.empty:
                     gain["date"] = pd.to_datetime(gain["date"])
 
-                    range_choice_total = st.radio(
-                        "Range (total)",
-                        options=["1W", "1M", "3M", "6M", "1Y", "All"],
-                        index=1,
-                        horizontal=True,
-                        label_visibility="collapsed",
-                        key="total_gain_range",
-                    )
-
-                    max_date_total = gain["date"].max()
-                    if range_choice_total == "1W":
-                        cutoff_total = max_date_total - pd.Timedelta(days=7)
-                    elif range_choice_total == "1M":
-                        cutoff_total = max_date_total - pd.DateOffset(months=1)
-                    elif range_choice_total == "3M":
-                        cutoff_total = max_date_total - pd.DateOffset(months=3)
-                    elif range_choice_total == "6M":
-                        cutoff_total = max_date_total - pd.DateOffset(months=6)
-                    elif range_choice_total == "1Y":
-                        cutoff_total = max_date_total - pd.DateOffset(years=1)
-                    else:
-                        cutoff_total = gain["date"].min()
-
-                    gain_filtered = gain[gain["date"] >= cutoff_total]
+                    cutoff = _cutoff(gain["date"].max(), range_choice)
+                    gain_filtered = gain if cutoff is None else gain[gain["date"] >= cutoff]
 
                     colors = ["#16a34a" if v >= 0 else "#dc2626" for v in gain_filtered["gain_twd"]]
                     fig_gain = make_subplots(specs=[[{"secondary_y": True}]])
@@ -734,7 +740,7 @@ def main() -> None:
                         secondary_y=True,
                     )
                     fig_gain.update_layout(
-                        title=f"Daily portfolio gain — {range_choice_total} (TWD and %)",
+                        title=f"Daily portfolio gain — {range_choice} (TWD and %)",
                         hovermode="x unified",
                         height=380,
                         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
@@ -760,30 +766,13 @@ def main() -> None:
                     stock_gain_df = pd.concat(stock_gains, ignore_index=True)
                     stock_gain_df["date"] = pd.to_datetime(stock_gain_df["date"])
 
-                    range_choice = st.radio(
-                        "Range",
-                        options=["1W", "1M", "3M", "6M", "1Y", "All"],
-                        index=1,
-                        horizontal=True,
-                        label_visibility="collapsed",
-                        key="stock_gain_range",
-                    )
-
-                    max_date = stock_gain_df["date"].max()
-                    if range_choice == "1W":
-                        cutoff = max_date - pd.Timedelta(days=7)
-                    elif range_choice == "1M":
-                        cutoff = max_date - pd.DateOffset(months=1)
-                    elif range_choice == "3M":
-                        cutoff = max_date - pd.DateOffset(months=3)
-                    elif range_choice == "6M":
-                        cutoff = max_date - pd.DateOffset(months=6)
-                    elif range_choice == "1Y":
-                        cutoff = max_date - pd.DateOffset(years=1)
-                    else:
-                        cutoff = stock_gain_df["date"].min()
-
-                    filtered = stock_gain_df[stock_gain_df["date"] >= cutoff].copy()
+                    # Reuse the shared range_choice from above
+                    cutoff = _cutoff(stock_gain_df["date"].max(), range_choice)
+                    filtered = (
+                        stock_gain_df
+                        if cutoff is None
+                        else stock_gain_df[stock_gain_df["date"] >= cutoff]
+                    ).copy()
 
                     def _fmt_gain(v: float) -> str:
                         color = "#16a34a" if v >= 0 else "#dc2626"
