@@ -767,14 +767,19 @@ def main() -> None:
                     fig_stock_gain = go.Figure()
                     for ticker in tickers_sorted:
                         tdf = filtered[filtered["ticker"] == ticker].sort_values("date")
-                        formatted = tdf["gain_twd"].apply(_fmt_gain).values
+                        # Build customdata as a plain list of single-element
+                        # lists. .values can be a PyArrow-backed pandas array
+                        # on newer stacks (Streamlit Cloud / Python 3.14),
+                        # which doesn't support .reshape(); .tolist() avoids
+                        # the dtype-specific path entirely.
+                        formatted = tdf["gain_twd"].apply(_fmt_gain).tolist()
                         fig_stock_gain.add_trace(
                             go.Bar(
                                 x=tdf["date"],
                                 y=tdf["gain_twd"],
                                 name=ticker,
                                 marker_color=color_map[ticker],
-                                customdata=formatted.reshape(-1, 1),
+                                customdata=[[v] for v in formatted],
                                 hovertemplate=f"{ticker}: %{{customdata[0]}}<extra></extra>",
                             )
                         )
@@ -788,7 +793,7 @@ def main() -> None:
                             mode="markers",
                             marker=dict(opacity=0, size=0.1),
                             showlegend=False,
-                            customdata=daily_total["formatted"].values.reshape(-1, 1),
+                            customdata=[[v] for v in daily_total["formatted"].tolist()],
                             hovertemplate="<b>Total: %{customdata[0]}</b><extra></extra>",
                             hoverinfo="text",
                         )
