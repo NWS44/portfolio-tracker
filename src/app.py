@@ -476,9 +476,12 @@ def main() -> None:
         if fx_prev:
             fx_delta = fx_today - fx_prev
             fx_pct = fx_delta / fx_prev * 100.0
-            st.caption(
-                f"USD→TWD rate used: **{fx_today:,.4f}**  "
-                f"({fx_delta:+.4f}, {fx_pct:+.2f}%)"
+            color = "#16a34a" if fx_delta >= 0 else "#dc2626"
+            st.markdown(
+                f"<small>USD→TWD rate used: <b>{fx_today:,.4f}</b>  "
+                f"<span style='color:{color}'>"
+                f"({fx_delta:+.4f}, {fx_pct:+.2f}%)</span></small>",
+                unsafe_allow_html=True,
             )
         else:
             st.caption(f"USD→TWD rate used: **{fx_today:,.4f}**")
@@ -566,32 +569,59 @@ def main() -> None:
             lambda r: r["market_value"] if r["currency"] == "TWD" else r["market_value"] * (r["fx_rate"] or 0),
             axis=1,
         )
-        st.dataframe(
-            view[
-                [
-                    "ticker", "market", "currency", "shares",
-                    "cost_basis", "last_close", "as_of",
-                    "daily_gain", "daily_gain_pct", "daily_gain_twd",
-                    "market_value", "market_value_twd",
-                    "cost_value", "unrealized_pl", "unrealized_pl_pct",
-                ]
-            ],
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "shares": st.column_config.NumberColumn(format="%.2f"),
-                "cost_basis": st.column_config.NumberColumn(format="%.4f"),
-                "last_close": st.column_config.NumberColumn(format="%.2f"),
-                "daily_gain": st.column_config.NumberColumn("daily_gain (native)", format="%,.2f"),
-                "daily_gain_pct": st.column_config.NumberColumn("daily_gain %", format="%+.2f%%"),
-                "daily_gain_twd": st.column_config.NumberColumn("daily_gain (TWD)", format="%,.0f"),
-                "market_value": st.column_config.NumberColumn("market_value (native)", format="%,.2f"),
-                "market_value_twd": st.column_config.NumberColumn("market_value (TWD)", format="%,.0f"),
-                "cost_value": st.column_config.NumberColumn(format="%,.2f"),
-                "unrealized_pl": st.column_config.NumberColumn(format="%,.2f"),
-                "unrealized_pl_pct": st.column_config.NumberColumn(format="%+.2f%%"),
-            },
+        # Build a Styler so gain/loss columns render green/red.
+        # NumberColumn formats don't support per-cell color, but Styler
+        # via st.dataframe does — at the cost of losing column_config
+        # formats, so we apply formats inside the Styler instead.
+        gain_cols = [
+            "daily_gain", "daily_gain_pct", "daily_gain_twd",
+            "unrealized_pl", "unrealized_pl_pct",
+        ]
+
+        def _color_sign(v):
+            if pd.isna(v):
+                return ""
+            return "color:#16a34a" if v >= 0 else "color:#dc2626"
+
+        view_table = view[
+            [
+                "ticker", "market", "currency", "shares",
+                "cost_basis", "last_close", "as_of",
+                "daily_gain", "daily_gain_pct", "daily_gain_twd",
+                "market_value", "market_value_twd",
+                "cost_value", "unrealized_pl", "unrealized_pl_pct",
+            ]
+        ].rename(
+            columns={
+                "daily_gain": "daily_gain (native)",
+                "daily_gain_pct": "daily_gain %",
+                "daily_gain_twd": "daily_gain (TWD)",
+                "market_value": "market_value (native)",
+                "market_value_twd": "market_value (TWD)",
+            }
         )
+
+        styled = view_table.style.format({
+            "shares": "{:,.2f}",
+            "cost_basis": "{:,.4f}",
+            "last_close": "{:,.2f}",
+            "daily_gain (native)": "{:+,.2f}",
+            "daily_gain %": "{:+.2f}%",
+            "daily_gain (TWD)": "{:+,.0f}",
+            "market_value (native)": "{:,.2f}",
+            "market_value (TWD)": "{:,.0f}",
+            "cost_value": "{:,.2f}",
+            "unrealized_pl": "{:+,.2f}",
+            "unrealized_pl_pct": "{:+.2f}%",
+        }, na_rep="—").map(
+            _color_sign,
+            subset=[
+                "daily_gain (native)", "daily_gain %", "daily_gain (TWD)",
+                "unrealized_pl", "unrealized_pl_pct",
+            ],
+        )
+
+        st.dataframe(styled, use_container_width=True, hide_index=True)
 
         pie_df = view[view["market_value_twd"].notna() & (view["market_value_twd"] > 0)].copy()
         if not pie_df.empty:
