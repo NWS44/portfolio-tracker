@@ -29,6 +29,10 @@ FX_TICKERS = {
     "USDTWD": "TWD=X",
 }
 
+# Re-fetch a small window before the last stored date so late corrections
+# (split/dividend adjustments, late prints) overwrite stale rows.
+INCREMENTAL_LOOKBACK_DAYS = 3
+
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_HOLDINGS = ROOT / "config" / "holdings.yaml"
 
@@ -161,10 +165,11 @@ def fetch_fx_rates(
             elif full_refresh:
                 period = "max"
             else:
-                start = datetime.strptime(last, "%Y-%m-%d").date().isoformat()
-                if start > today.isoformat():
+                last_d = datetime.strptime(last, "%Y-%m-%d").date()
+                if last_d.isoformat() > today.isoformat():
                     print(f"[skip] FX {pair} — already current ({last})")
                     continue
+                start = (last_d - timedelta(days=INCREMENTAL_LOOKBACK_DAYS)).isoformat()
 
         try:
             df = _download_one(yf_symbol, start=start, end=end if start else None, period=period)
@@ -218,10 +223,11 @@ def fetch_for_tickers(
             elif full_refresh:
                 period = "max"
             else:
-                start = datetime.strptime(last, "%Y-%m-%d").date().isoformat()
-                if start > today.isoformat():
+                last_d = datetime.strptime(last, "%Y-%m-%d").date()
+                if last_d.isoformat() > today.isoformat():
                     print(f"[skip] {t} — already current ({last})")
                     continue
+                start = (last_d - timedelta(days=INCREMENTAL_LOOKBACK_DAYS)).isoformat()
 
         try:
             df = _download_one(t, start=start, end=end if start else None, period=period)
