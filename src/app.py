@@ -216,9 +216,25 @@ def _ensure_prices_loaded(tickers: list[str]) -> None:
 
     if missing:
         needs_recompute = True
+        fetch_msg = st.empty()
         with st.spinner(f"Fetching prices for {len(missing)} ticker(s) from Yahoo Finance..."):
-            fetch_for_tickers(missing)
-            fetch_fx_rates()
+            try:
+                rows_added = fetch_for_tickers(missing)
+                fx_rows = fetch_fx_rates()
+            except Exception as e:
+                fetch_msg.error(f"Yahoo Finance fetch failed: {e}")
+                rows_added = 0
+                fx_rows = 0
+
+        # Re-check what we actually got
+        prices_after = load_prices(tickers=tickers)
+        got_tickers = set(prices_after["ticker"].unique()) if not prices_after.empty else set()
+        still_missing = [t for t in tickers if t not in got_tickers]
+        if still_missing:
+            fetch_msg.error(
+                f"Yahoo Finance returned no data for: {', '.join(still_missing)}. "
+                f"Check the ticker symbols (US: plain, TW: append .TW or .TWO)."
+            )
 
     # Also recompute if daily_totals has tickers not in current holdings
     # (left over from a previous holdings set).
