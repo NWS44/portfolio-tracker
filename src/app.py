@@ -16,6 +16,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from compute_totals import compute_daily_totals  # noqa: E402
 from db import (  # noqa: E402
+    get_meta,
     init_db,
     load_daily_totals,
     load_fx_rates,
@@ -488,6 +489,9 @@ def main() -> None:
                 fx_prev = float(fx_on.iloc[-2]["rate"])
 
     st.subheader("Summary")
+    last_fetch = get_meta("last_price_fetch")
+    if last_fetch:
+        st.caption(f"Prices last updated: **{last_fetch}** (Taipei, 24hr)")
     if fx_today:
         if fx_prev:
             fx_delta = fx_today - fx_prev
