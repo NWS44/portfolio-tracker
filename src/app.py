@@ -370,8 +370,17 @@ def _wipe_all_holdings_data() -> None:
 def main() -> None:
     init_db()
 
-    st.title("📈 Portfolio Tracker")
-    st.caption("US + TW daily prices · holdings × close → daily portfolio value (TWD combined)")
+    title_col, refresh_col, hide_col = st.columns([5, 1.4, 1.4], vertical_alignment="center")
+    with title_col:
+        st.title("📈 Portfolio Tracker")
+        st.caption("US + TW daily prices · holdings × close → daily portfolio value (TWD combined)")
+    with refresh_col:
+        if st.button("🔄 Refresh prices", use_container_width=True):
+            with st.spinner("Fetching from Yahoo Finance..."):
+                msg = refresh_all()
+            st.success(msg)
+    with hide_col:
+        hide_summary = st.toggle("Hide totals", value=False, key="hide_summary")
 
     # Reserve a slot at the very top of the sidebar for the Controls block.
     # We populate it AFTER _ensure_holdings_loaded() runs so we know whether
@@ -394,11 +403,6 @@ def main() -> None:
     # Now fill the reserved slot at the top — holdings exist at this point.
     with controls_slot.container():
         st.header("Controls")
-        if st.button("🔄 Refresh prices", use_container_width=True):
-            with st.spinner("Fetching from Yahoo Finance..."):
-                msg = refresh_all()
-            st.success(msg)
-
         if st.button("🗑️ Clear holdings", use_container_width=True, type="secondary"):
             _wipe_all_holdings_data()
             st.rerun()
@@ -488,74 +492,75 @@ def main() -> None:
             if len(fx_on) >= 2:
                 fx_prev = float(fx_on.iloc[-2]["rate"])
 
-    st.subheader("Summary")
-    last_fetch = get_meta("last_price_fetch")
-    if last_fetch:
-        st.caption(f"Prices last updated: **{last_fetch}** (Taipei, 24hr)")
-    if fx_today:
-        if fx_prev:
-            fx_delta = fx_today - fx_prev
-            fx_pct = fx_delta / fx_prev * 100.0
-            color = "#16a34a" if fx_delta >= 0 else "#dc2626"
-            st.markdown(
-                f"<small>USD→TWD rate used: <b>{fx_today:,.4f}</b>  "
-                f"<span style='color:{color}'>"
-                f"({fx_delta:+.4f}, {fx_pct:+.2f}%)</span></small>",
-                unsafe_allow_html=True,
-            )
-        else:
-            st.caption(f"USD→TWD rate used: **{fx_today:,.4f}**")
+    if not hide_summary:
+        st.subheader("Summary")
+        last_fetch = get_meta("last_price_fetch")
+        if last_fetch:
+            st.caption(f"Prices last updated: **{last_fetch}** (Taipei, 24hr)")
+        if fx_today:
+            if fx_prev:
+                fx_delta = fx_today - fx_prev
+                fx_pct = fx_delta / fx_prev * 100.0
+                color = "#16a34a" if fx_delta >= 0 else "#dc2626"
+                st.markdown(
+                    f"<small>USD→TWD rate used: <b>{fx_today:,.4f}</b>  "
+                    f"<span style='color:{color}'>"
+                    f"({fx_delta:+.4f}, {fx_pct:+.2f}%)</span></small>",
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.caption(f"USD→TWD rate used: **{fx_today:,.4f}**")
 
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        st.metric(
-            label="Combined Total (TWD)",
-            value=f"NT$ {combined_today:,.0f}",
-            delta=(
-                f"{combined_delta:+,.0f}  ({combined_delta_pct:+.2f}%)"
-                if combined_delta is not None and combined_prev
-                else None
-            ),
-        )
-        as_of_combined = max(d for d in [tw_today_date, us_today_date] if d) if (tw_today_date or us_today_date) else "—"
-        st.caption(f"as of {as_of_combined}")
-    with c2:
-        tw_gain_twd = tw_today_twd - tw_prev_twd if tw_prev_twd else 0.0
-        tw_gain_pct = (tw_gain_twd / tw_prev_twd * 100.0) if tw_prev_twd else None
-        st.metric(
-            label="TW stocks (TWD)",
-            value=f"NT$ {tw_today_twd:,.0f}",
-            delta=(
-                f"{tw_gain_twd:+,.0f}  ({tw_gain_pct:+.2f}%)"
-                if tw_gain_pct is not None
-                else None
-            ),
-        )
-        st.caption(f"as of {tw_today_date or '—'}")
-    with c3:
-        us_gain_usd = us_today_usd - us_prev_usd if us_prev_usd else 0.0
-        us_gain_twd = us_today_twd - us_prev_twd if us_prev_twd else 0.0
-        us_gain_pct = (us_gain_usd / us_prev_usd * 100.0) if us_prev_usd else None
-        us_gain_twd_pct = (us_gain_twd / us_prev_twd * 100.0) if us_prev_twd else None
-        st.metric(
-            label="US stocks (USD)",
-            value=f"US$ {us_today_usd:,.2f}",
-            delta=(
-                f"{us_gain_usd:+,.2f}  ({us_gain_pct:+.2f}%)"
-                if us_gain_pct is not None
-                else None
-            ),
-        )
-        st.metric(
-            label="US stocks (TWD equiv.)",
-            value=f"NT$ {us_today_twd:,.0f}",
-            delta=(
-                f"{us_gain_twd:+,.0f}  ({us_gain_twd_pct:+.2f}%)"
-                if us_gain_twd_pct is not None
-                else None
-            ),
-        )
-        st.caption(f"as of {us_today_date or '—'}")
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            st.metric(
+                label="Combined Total (TWD)",
+                value=f"NT$ {combined_today:,.0f}",
+                delta=(
+                    f"{combined_delta:+,.0f}  ({combined_delta_pct:+.2f}%)"
+                    if combined_delta is not None and combined_prev
+                    else None
+                ),
+            )
+            as_of_combined = max(d for d in [tw_today_date, us_today_date] if d) if (tw_today_date or us_today_date) else "—"
+            st.caption(f"as of {as_of_combined}")
+        with c2:
+            tw_gain_twd = tw_today_twd - tw_prev_twd if tw_prev_twd else 0.0
+            tw_gain_pct = (tw_gain_twd / tw_prev_twd * 100.0) if tw_prev_twd else None
+            st.metric(
+                label="TW stocks (TWD)",
+                value=f"NT$ {tw_today_twd:,.0f}",
+                delta=(
+                    f"{tw_gain_twd:+,.0f}  ({tw_gain_pct:+.2f}%)"
+                    if tw_gain_pct is not None
+                    else None
+                ),
+            )
+            st.caption(f"as of {tw_today_date or '—'}")
+        with c3:
+            us_gain_usd = us_today_usd - us_prev_usd if us_prev_usd else 0.0
+            us_gain_twd = us_today_twd - us_prev_twd if us_prev_twd else 0.0
+            us_gain_pct = (us_gain_usd / us_prev_usd * 100.0) if us_prev_usd else None
+            us_gain_twd_pct = (us_gain_twd / us_prev_twd * 100.0) if us_prev_twd else None
+            st.metric(
+                label="US stocks (USD)",
+                value=f"US$ {us_today_usd:,.2f}",
+                delta=(
+                    f"{us_gain_usd:+,.2f}  ({us_gain_pct:+.2f}%)"
+                    if us_gain_pct is not None
+                    else None
+                ),
+            )
+            st.metric(
+                label="US stocks (TWD equiv.)",
+                value=f"NT$ {us_today_twd:,.0f}",
+                delta=(
+                    f"{us_gain_twd:+,.0f}  ({us_gain_twd_pct:+.2f}%)"
+                    if us_gain_twd_pct is not None
+                    else None
+                ),
+            )
+            st.caption(f"as of {us_today_date or '—'}")
 
     tab_holdings, tab_history, tab_portfolio = st.tabs(
         ["Holdings", "Price history", "Daily portfolio total"]
