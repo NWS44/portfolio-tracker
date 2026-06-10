@@ -8,6 +8,7 @@ from pathlib import Path
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+import plotly.io as pio
 import streamlit as st
 from plotly.subplots import make_subplots
 
@@ -36,9 +37,152 @@ LOCAL_HOLDINGS_PATH = ROOT / "config" / "holdings.yaml"
 
 st.set_page_config(
     page_title="Portfolio Tracker",
-    page_icon="📈",
+    page_icon="🕹️",
     layout="wide",
 )
+
+# ---------------------------------------------------------------------------
+# Retro arcade theme: pixel fonts (Press Start 2P for headings/buttons, VT323
+# for body text and numbers), neon green/pink palette, chunky "8-bit" borders
+# with hard drop-shadows, and a faint CRT scanline overlay.
+# ---------------------------------------------------------------------------
+NEON_GREEN = "#00ff9d"
+NEON_RED = "#ff2e63"
+
+GAME_CSS = """
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap');
+
+/* Body text: VT323 is a readable pixel font, so bump the size up. */
+html, body, .stMarkdown, .stCaption, [data-testid="stWidgetLabel"] p,
+.stTextArea textarea, .stDataFrame, .stMetric {
+    font-family: 'VT323', monospace !important;
+    font-size: 1.15rem;
+}
+
+/* Headings, buttons, tabs: chunky arcade font. */
+h1, h2, h3 {
+    font-family: 'Press Start 2P', monospace !important;
+    color: #00ff9d !important;
+    text-shadow: 0 0 8px rgba(0, 255, 157, 0.7), 3px 3px 0 #ff2e63;
+}
+h1 { font-size: 1.7rem !important; line-height: 1.5 !important; }
+h2 { font-size: 1.1rem !important; }
+h3 { font-size: 0.9rem !important; }
+
+/* Metric cards: 8-bit panels with hard pixel shadows. */
+[data-testid="stMetric"] {
+    background: #16163a;
+    border: 3px solid #00ff9d;
+    border-radius: 0;
+    box-shadow: 5px 5px 0 #ff2e63;
+    padding: 14px 16px;
+    margin-bottom: 10px;
+}
+[data-testid="stMetricLabel"] p {
+    font-family: 'Press Start 2P', monospace !important;
+    font-size: 0.62rem !important;
+    color: #9d9dff !important;
+}
+[data-testid="stMetricValue"] {
+    font-family: 'VT323', monospace !important;
+    font-size: 2.6rem !important;
+    color: #fffb96 !important;
+    text-shadow: 0 0 10px rgba(255, 251, 150, 0.5);
+}
+[data-testid="stMetricDelta"] {
+    font-family: 'VT323', monospace !important;
+    font-size: 1.3rem !important;
+}
+
+/* Buttons: arcade cabinet buttons that "press down" on click. */
+.stButton > button, .stDownloadButton > button {
+    font-family: 'Press Start 2P', monospace !important;
+    font-size: 0.62rem !important;
+    word-break: keep-all;
+    overflow-wrap: normal;
+    line-height: 1.7;
+}
+.stButton > button p, .stDownloadButton > button p {
+    font-family: 'Press Start 2P', monospace !important;
+    font-size: 0.62rem !important;
+    word-break: keep-all !important;
+    overflow-wrap: normal !important;
+    border: 3px solid #00ff9d !important;
+    border-radius: 0 !important;
+    background: #16163a !important;
+    color: #00ff9d !important;
+    box-shadow: 4px 4px 0 #ff2e63;
+    transition: none;
+}
+.stButton > button:hover {
+    background: #00ff9d !important;
+    color: #0d0221 !important;
+}
+.stButton > button:active {
+    transform: translate(4px, 4px);
+    box-shadow: none;
+}
+.stButton > button[kind="primary"] {
+    border-color: #ff2e63 !important;
+    color: #ff2e63 !important;
+    box-shadow: 4px 4px 0 #00ff9d;
+}
+.stButton > button[kind="primary"]:hover {
+    background: #ff2e63 !important;
+    color: #0d0221 !important;
+}
+
+/* Tabs: stage-select bar. */
+.stTabs [data-baseweb="tab"] {
+    font-family: 'Press Start 2P', monospace !important;
+    font-size: 0.6rem !important;
+    color: #9d9dff;
+}
+.stTabs [aria-selected="true"] {
+    color: #00ff9d !important;
+}
+
+/* Sidebar: darker panel with a neon edge. */
+[data-testid="stSidebar"] {
+    background: #0a0118;
+    border-right: 3px solid #00ff9d;
+}
+
+/* Toggle/radio labels readable in pixel style. */
+.stRadio label, .stToggle label, .stMultiSelect label {
+    font-family: 'VT323', monospace !important;
+}
+
+/* Faint CRT scanlines over the whole app. */
+[data-testid="stAppViewContainer"]::after {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    background: repeating-linear-gradient(
+        0deg,
+        rgba(0, 0, 0, 0.12) 0px,
+        rgba(0, 0, 0, 0.12) 1px,
+        transparent 1px,
+        transparent 3px
+    );
+    z-index: 9999;
+}
+</style>
+"""
+
+# Plotly: dark template with the same neon palette and pixel body font.
+_game_template = pio.templates["plotly_dark"]
+_game_template.layout.paper_bgcolor = "rgba(0,0,0,0)"
+_game_template.layout.plot_bgcolor = "rgba(22,22,58,0.55)"
+_game_template.layout.font = dict(family="VT323, monospace", size=16, color="#e0e0ff")
+NEON_COLORWAY = [
+    "#00ff9d", "#ff2e63", "#fffb96", "#08f7fe", "#f5a623",
+    "#bd93f9", "#ff79c6", "#50fa7b", "#ffb86c", "#8be9fd",
+]
+_game_template.layout.colorway = NEON_COLORWAY
+pio.templates.default = "plotly_dark"
 
 
 # Cache TTLs: prices/totals/fx cached for 6 hours since they only change after market close.
@@ -370,9 +514,11 @@ def _wipe_all_holdings_data() -> None:
 def main() -> None:
     init_db()
 
+    st.markdown(GAME_CSS, unsafe_allow_html=True)
+
     title_col, refresh_col, hide_col = st.columns([5, 1.4, 1.4], vertical_alignment="center")
     with title_col:
-        st.title("📈 Portfolio Tracker")
+        st.title("🕹️ PORTFOLIO TRACKER")
         st.caption("US + TW daily prices · holdings × close → daily portfolio value (TWD combined)")
     with refresh_col:
         if st.button("🔄 Refresh prices", use_container_width=True):
@@ -501,7 +647,7 @@ def main() -> None:
             if fx_prev:
                 fx_delta = fx_today - fx_prev
                 fx_pct = fx_delta / fx_prev * 100.0
-                color = "#16a34a" if fx_delta >= 0 else "#dc2626"
+                color = NEON_GREEN if fx_delta >= 0 else NEON_RED
                 st.markdown(
                     f"<small>USD→TWD rate used: <b>{fx_today:,.4f}</b>  "
                     f"<span style='color:{color}'>"
@@ -606,7 +752,7 @@ def main() -> None:
         def _color_sign(v):
             if pd.isna(v):
                 return ""
-            return "color:#16a34a" if v >= 0 else "color:#dc2626"
+            return f"color:{NEON_GREEN}" if v >= 0 else f"color:{NEON_RED}"
 
         view_table = view[
             [
@@ -679,7 +825,7 @@ def main() -> None:
                     title="Holdings allocation by market (TWD)",
                     hole=0.45,
                     color="market",
-                    color_discrete_map={"TW": "#1f77b4", "US": "#d62728"},
+                    color_discrete_map={"TW": "#08f7fe", "US": NEON_RED},
                 )
                 fig_pie_mkt.update_traces(
                     textposition="outside",
@@ -811,7 +957,7 @@ def main() -> None:
                     cutoff = _cutoff(gain["date"].max(), range_choice)
                     gain_filtered = gain if cutoff is None else gain[gain["date"] >= cutoff]
 
-                    colors = ["#16a34a" if v >= 0 else "#dc2626" for v in gain_filtered["gain_twd"]]
+                    colors = [NEON_GREEN if v >= 0 else NEON_RED for v in gain_filtered["gain_twd"]]
                     fig_gain = make_subplots(specs=[[{"secondary_y": True}]])
                     fig_gain.add_trace(
                         go.Bar(
@@ -829,7 +975,7 @@ def main() -> None:
                             y=gain_filtered["gain_pct"],
                             mode="lines",
                             name="Gain %",
-                            line=dict(color="#1f77b4", width=1.5),
+                            line=dict(color="#08f7fe", width=1.5),
                             hovertemplate="%{x|%Y-%m-%d}<br>Gain: %{y:+.2f}%<extra></extra>",
                         ),
                         secondary_y=True,
@@ -870,10 +1016,10 @@ def main() -> None:
                     ).copy()
 
                     def _fmt_gain(v: float) -> str:
-                        color = "#16a34a" if v >= 0 else "#dc2626"
+                        color = NEON_GREEN if v >= 0 else NEON_RED
                         return f"<span style='color:{color}'>{v:+,.0f}</span>"
 
-                    palette = px.colors.qualitative.Plotly
+                    palette = NEON_COLORWAY
                     tickers_sorted = sorted(filtered["ticker"].unique())
                     color_map = {t: palette[i % len(palette)] for i, t in enumerate(tickers_sorted)}
 

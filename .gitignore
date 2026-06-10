@@ -1,7 +1,8 @@
 __pycache__/
 *.pyc
 data/*.db
-.streamlit/
+# Allow .streamlit/config.toml (theme) but never secrets
+.streamlit/secrets.toml
 .venv/
 venv/
 .claude/settings.local.json
