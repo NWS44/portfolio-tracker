@@ -1,6 +1,7 @@
 """Streamlit dashboard for the stock-price portfolio tracker."""
 from __future__ import annotations
 
+import copy
 import sys
 from datetime import date, timedelta
 from pathlib import Path
@@ -52,6 +53,10 @@ NEON_RED = "#ff2e63"
 GAME_CSS = """
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap');
+
+/* Explicit background so switching themes swaps the page color too. */
+html, body, .stApp, [data-testid="stAppViewContainer"] { background: #0d0221; }
+[data-testid="stHeader"] { background: #0d0221; }
 
 /* Body text: VT323 is a readable pixel font, so bump the size up. */
 html, body, .stMarkdown, .stCaption, [data-testid="stWidgetLabel"] p,
@@ -142,6 +147,7 @@ h3 { font-size: 0.9rem !important; }
 .stTabs [aria-selected="true"] {
     color: #00ff9d !important;
 }
+.stTabs [data-baseweb="tab-highlight"] { background-color: #00ff9d; }
 
 /* Sidebar: darker panel with a neon edge. */
 [data-testid="stSidebar"] {
@@ -172,17 +178,186 @@ h3 { font-size: 0.9rem !important; }
 </style>
 """
 
-# Plotly: dark template with the same neon palette and pixel body font.
-_game_template = pio.templates["plotly_dark"]
-_game_template.layout.paper_bgcolor = "rgba(0,0,0,0)"
-_game_template.layout.plot_bgcolor = "rgba(22,22,58,0.55)"
-_game_template.layout.font = dict(family="VT323, monospace", size=16, color="#e0e0ff")
 NEON_COLORWAY = [
     "#00ff9d", "#ff2e63", "#fffb96", "#08f7fe", "#f5a623",
     "#bd93f9", "#ff79c6", "#50fa7b", "#ffb86c", "#8be9fd",
 ]
-_game_template.layout.colorway = NEON_COLORWAY
-pio.templates.default = "plotly_dark"
+
+# ---------------------------------------------------------------------------
+# Stock Exchange theme: professional trading-terminal look. Near-black panels,
+# amber accents, Inter for labels, IBM Plex Mono for numbers, TradingView-style
+# teal/red for gains/losses. No shadows, thin borders, uppercase labels.
+# ---------------------------------------------------------------------------
+AMBER = "#ffb000"
+EXCH_GREEN = "#26a69a"
+EXCH_RED = "#ef5350"
+EXCH_COLORWAY = [
+    "#ffb000", "#4f8ff7", "#26a69a", "#ef5350", "#ab7df6",
+    "#00bcd4", "#ff8f40", "#9ccc65", "#ec407a", "#78909c",
+]
+
+EXCHANGE_CSS = """
+<style>
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap');
+
+html, body, .stApp, [data-testid="stAppViewContainer"] { background: #0b0e14; }
+[data-testid="stHeader"] { background: #0b0e14; }
+[data-testid="stSidebar"] {
+    background: #0e1320;
+    border-right: 1px solid #232b38;
+}
+
+html, body, .stMarkdown, .stCaption, [data-testid="stWidgetLabel"] p {
+    font-family: 'Inter', sans-serif !important;
+}
+.stDataFrame, .stTextArea textarea, code, pre {
+    font-family: 'IBM Plex Mono', monospace !important;
+}
+
+h1, h2, h3 {
+    font-family: 'Inter', sans-serif !important;
+    font-weight: 700 !important;
+    color: #e8eaed !important;
+    letter-spacing: 0.01em;
+    text-shadow: none;
+}
+h1 {
+    border-left: 8px solid #ffb000;
+    padding-left: 14px !important;
+    font-size: 2rem !important;
+}
+h2 { font-size: 1.25rem !important; }
+h3 { font-size: 1.05rem !important; }
+
+/* Metric cards: flat terminal panels with an amber index bar. */
+[data-testid="stMetric"] {
+    background: #11161f;
+    border: 1px solid #232b38;
+    border-left: 4px solid #ffb000;
+    border-radius: 4px;
+    padding: 14px 16px;
+    margin-bottom: 10px;
+}
+[data-testid="stMetricLabel"] p {
+    font-family: 'Inter', sans-serif !important;
+    font-size: 0.72rem !important;
+    font-weight: 600 !important;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #8b95a5 !important;
+}
+[data-testid="stMetricValue"] {
+    font-family: 'IBM Plex Mono', monospace !important;
+    font-size: 1.9rem !important;
+    font-weight: 600 !important;
+    color: #e8eaed !important;
+}
+[data-testid="stMetricDelta"] {
+    font-family: 'IBM Plex Mono', monospace !important;
+    font-size: 0.95rem !important;
+}
+
+.stButton > button, .stDownloadButton > button {
+    font-family: 'Inter', sans-serif !important;
+    font-weight: 600 !important;
+    font-size: 0.85rem !important;
+    background: #11161f !important;
+    color: #ffb000 !important;
+    border: 1px solid #ffb000 !important;
+    border-radius: 3px !important;
+    box-shadow: none;
+}
+.stButton > button:hover {
+    background: #ffb000 !important;
+    color: #0b0e14 !important;
+}
+.stButton > button[kind="primary"] {
+    background: #ffb000 !important;
+    color: #0b0e14 !important;
+}
+.stButton > button[kind="primary"]:hover { background: #ffc94d !important; }
+
+.stTabs [data-baseweb="tab"] {
+    font-family: 'Inter', sans-serif !important;
+    font-weight: 600 !important;
+    font-size: 0.8rem !important;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #8b95a5;
+}
+.stTabs [aria-selected="true"] { color: #ffb000 !important; }
+.stTabs [data-baseweb="tab-highlight"] { background-color: #ffb000; }
+
+/* Inputs pick up the panel color instead of the arcade purple. */
+.stTextArea textarea, [data-baseweb="select"] > div, [data-testid="stDateInput"] input {
+    background-color: #11161f !important;
+    border-color: #232b38 !important;
+}
+</style>
+"""
+
+
+def _register_plotly_template(
+    name: str,
+    *,
+    plot_bg: str,
+    grid: str,
+    font_family: str,
+    font_size: int,
+    font_color: str,
+    colorway: list[str],
+) -> None:
+    t = copy.deepcopy(pio.templates["plotly_dark"])
+    t.layout.paper_bgcolor = "rgba(0,0,0,0)"
+    t.layout.plot_bgcolor = plot_bg
+    t.layout.font = dict(family=font_family, size=font_size, color=font_color)
+    t.layout.colorway = colorway
+    t.layout.xaxis.gridcolor = grid
+    t.layout.yaxis.gridcolor = grid
+    pio.templates[name] = t
+
+
+_register_plotly_template(
+    "arcade",
+    plot_bg="rgba(22,22,58,0.55)",
+    grid="#2a2a5e",
+    font_family="VT323, monospace",
+    font_size=16,
+    font_color="#e0e0ff",
+    colorway=NEON_COLORWAY,
+)
+_register_plotly_template(
+    "exchange",
+    plot_bg="rgba(17,22,31,0.6)",
+    grid="#1c2430",
+    font_family="IBM Plex Mono, monospace",
+    font_size=13,
+    font_color="#c5ccd6",
+    colorway=EXCH_COLORWAY,
+)
+
+# Each theme bundles its CSS, plotly template name, gain/loss/accent colors
+# (used by inline-styled values and chart traces), and the title string.
+THEMES = {
+    "🕹️ Retro Arcade": {
+        "css": GAME_CSS,
+        "plotly": "arcade",
+        "up": NEON_GREEN,
+        "down": NEON_RED,
+        "accent": "#08f7fe",
+        "colorway": NEON_COLORWAY,
+        "title": "🕹️ PORTFOLIO TRACKER",
+    },
+    "📊 Stock Exchange": {
+        "css": EXCHANGE_CSS,
+        "plotly": "exchange",
+        "up": EXCH_GREEN,
+        "down": EXCH_RED,
+        "accent": AMBER,
+        "colorway": EXCH_COLORWAY,
+        "title": "📊 Portfolio Tracker",
+    },
+}
 
 
 # Cache TTLs: prices/totals/fx cached for 6 hours since they only change after market close.
@@ -514,11 +689,18 @@ def _wipe_all_holdings_data() -> None:
 def main() -> None:
     init_db()
 
-    st.markdown(GAME_CSS, unsafe_allow_html=True)
+    # Theme menu lives at the very top of the sidebar so it applies even
+    # before any holdings are loaded.
+    with st.sidebar:
+        theme_name = st.selectbox("🎨 Theme", list(THEMES), key="ui_theme")
+    theme = THEMES[theme_name]
+
+    st.markdown(theme["css"], unsafe_allow_html=True)
+    pio.templates.default = theme["plotly"]
 
     title_col, refresh_col, hide_col = st.columns([5, 1.4, 1.4], vertical_alignment="center")
     with title_col:
-        st.title("🕹️ PORTFOLIO TRACKER")
+        st.title(theme["title"])
         st.caption("US + TW daily prices · holdings × close → daily portfolio value (TWD combined)")
     with refresh_col:
         if st.button("🔄 Refresh prices", use_container_width=True):
@@ -647,7 +829,7 @@ def main() -> None:
             if fx_prev:
                 fx_delta = fx_today - fx_prev
                 fx_pct = fx_delta / fx_prev * 100.0
-                color = NEON_GREEN if fx_delta >= 0 else NEON_RED
+                color = theme["up"] if fx_delta >= 0 else theme["down"]
                 st.markdown(
                     f"<small>USD→TWD rate used: <b>{fx_today:,.4f}</b>  "
                     f"<span style='color:{color}'>"
@@ -752,7 +934,7 @@ def main() -> None:
         def _color_sign(v):
             if pd.isna(v):
                 return ""
-            return f"color:{NEON_GREEN}" if v >= 0 else f"color:{NEON_RED}"
+            return f"color:{theme['up']}" if v >= 0 else f"color:{theme['down']}"
 
         view_table = view[
             [
@@ -825,7 +1007,7 @@ def main() -> None:
                     title="Holdings allocation by market (TWD)",
                     hole=0.45,
                     color="market",
-                    color_discrete_map={"TW": "#08f7fe", "US": NEON_RED},
+                    color_discrete_map={"TW": theme["accent"], "US": theme["down"]},
                 )
                 fig_pie_mkt.update_traces(
                     textposition="outside",
@@ -957,7 +1139,7 @@ def main() -> None:
                     cutoff = _cutoff(gain["date"].max(), range_choice)
                     gain_filtered = gain if cutoff is None else gain[gain["date"] >= cutoff]
 
-                    colors = [NEON_GREEN if v >= 0 else NEON_RED for v in gain_filtered["gain_twd"]]
+                    colors = [theme["up"] if v >= 0 else theme["down"] for v in gain_filtered["gain_twd"]]
                     fig_gain = make_subplots(specs=[[{"secondary_y": True}]])
                     fig_gain.add_trace(
                         go.Bar(
@@ -975,7 +1157,7 @@ def main() -> None:
                             y=gain_filtered["gain_pct"],
                             mode="lines",
                             name="Gain %",
-                            line=dict(color="#08f7fe", width=1.5),
+                            line=dict(color=theme["accent"], width=1.5),
                             hovertemplate="%{x|%Y-%m-%d}<br>Gain: %{y:+.2f}%<extra></extra>",
                         ),
                         secondary_y=True,
@@ -1016,10 +1198,10 @@ def main() -> None:
                     ).copy()
 
                     def _fmt_gain(v: float) -> str:
-                        color = NEON_GREEN if v >= 0 else NEON_RED
+                        color = theme["up"] if v >= 0 else theme["down"]
                         return f"<span style='color:{color}'>{v:+,.0f}</span>"
 
-                    palette = NEON_COLORWAY
+                    palette = theme["colorway"]
                     tickers_sorted = sorted(filtered["ticker"].unique())
                     color_map = {t: palette[i % len(palette)] for i, t in enumerate(tickers_sorted)}
 
