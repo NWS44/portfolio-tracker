@@ -20,18 +20,13 @@ from compute_totals import compute_daily_totals  # noqa: E402
 from db import (  # noqa: E402
     get_meta,
     init_db,
-    load_daily_totals,
     load_fx_rates,
-    load_holdings,
     load_prices,
-    replace_daily_totals,
-    replace_holdings,
 )
 from fetch_prices import (  # noqa: E402
     fetch_for_tickers,
     fetch_fx_rates,
     parse_holdings_yaml,
-    sync_holdings_from_rows,
 )
 
 LOCAL_HOLDINGS_PATH = ROOT / "config" / "holdings.yaml"
@@ -107,18 +102,18 @@ h3 { font-size: 0.9rem !important; }
     word-break: keep-all;
     overflow-wrap: normal;
     line-height: 1.7;
-}
-.stButton > button p, .stDownloadButton > button p {
-    font-family: 'Press Start 2P', monospace !important;
-    font-size: 0.62rem !important;
-    word-break: keep-all !important;
-    overflow-wrap: normal !important;
     border: 3px solid #00ff9d !important;
     border-radius: 0 !important;
     background: #16163a !important;
     color: #00ff9d !important;
     box-shadow: 4px 4px 0 #ff2e63;
     transition: none;
+}
+.stButton > button p, .stDownloadButton > button p {
+    font-family: 'Press Start 2P', monospace !important;
+    font-size: 0.62rem !important;
+    word-break: keep-all !important;
+    overflow-wrap: normal !important;
 }
 .stButton > button:hover {
     background: #00ff9d !important;
@@ -360,21 +355,35 @@ THEMES = {
 }
 
 
-# Cache TTLs: prices/totals/fx cached for 6 hours since they only change after market close.
-# Holdings cached briefly so uploads take effect quickly.
-@st.cache_data(ttl=60)
-def get_holdings() -> pd.DataFrame:
-    return load_holdings()
+HOLDINGS_COLUMNS = ["ticker", "market", "shares", "cost_basis", "currency"]
 
 
+# IMPORTANT (multi-user): holdings are PER SESSION, never read from the shared
+# DB. Streamlit's `st.cache_data` and the SQLite file are both process-global —
+# shared across every visitor — so caching holdings there would let one user
+# see another's portfolio. We keep holdings in `st.session_state` (per browser
+# session) and derive a DataFrame from it on each run.
+def session_holdings() -> pd.DataFrame:
+    rows = st.session_state.get("holdings_rows") or []
+    if not rows:
+        return pd.DataFrame(columns=HOLDINGS_COLUMNS)
+    df = pd.DataFrame(rows)
+    for col in HOLDINGS_COLUMNS:
+        if col not in df.columns:
+            df[col] = None
+    return (
+        df[HOLDINGS_COLUMNS]
+        .sort_values(["market", "ticker"])
+        .reset_index(drop=True)
+    )
+
+
+# Prices and FX are PUBLIC market data keyed by ticker/date — safe and useful
+# to share across all sessions, so these stay cached (6h; they only change
+# after market close).
 @st.cache_data(ttl=21600)  # 6 hours
 def get_prices(tickers: tuple[str, ...], start: str, end: str) -> pd.DataFrame:
     return load_prices(tickers=list(tickers), start=start, end=end)
-
-
-@st.cache_data(ttl=21600)  # 6 hours
-def get_daily_totals(start: str, end: str) -> pd.DataFrame:
-    return load_daily_totals(start=start, end=end)
 
 
 @st.cache_data(ttl=21600)  # 6 hours
@@ -398,8 +407,10 @@ TEMPLATE_YAML = (
 
 
 def _ensure_holdings_loaded() -> bool:
-    """Resolve holdings source: paste / upload → session → local file.
-    Returns True if holdings are loaded into the DB.
+    """Resolve holdings source: paste / upload → this session → local file.
+    Returns True if holdings are present in `st.session_state` for this session.
+    Holdings are kept per session only (never in the shared DB) so concurrent
+    users on the same Streamlit Cloud container don't see each other's data.
     Mobile-friendly: file uploaders are flaky on iOS Safari, so a paste
     text-area is provided as the primary input.
     """
@@ -472,32 +483,19 @@ def _ensure_holdings_loaded() -> bool:
                     st.error(f"Could not parse uploaded file: {e}")
                     return False
 
-        # Fall back to existing session, then the DB (persists across F5
-        # because Streamlit Cloud keeps the container's filesystem alive),
-        # then the local dev YAML.
+        # Fall back to this session's earlier upload, then (dev only) the local
+        # YAML. We deliberately do NOT read holdings from the shared DB: on
+        # Streamlit Cloud every visitor shares one container, so a DB fallback
+        # would show one user another user's portfolio. Holdings live only in
+        # this browser session.
         if rows is None and "holdings_rows" in st.session_state:
             rows = st.session_state["holdings_rows"]
             source = "session (loaded earlier)"
-        if rows is None:
-            db_holdings = load_holdings()
-            if not db_holdings.empty:
-                rows = [
-                    {
-                        "ticker": r["ticker"],
-                        "market": r["market"],
-                        "shares": r["shares"],
-                        "cost_basis": r["cost_basis"],
-                        "currency": r["currency"],
-                    }
-                    for _, r in db_holdings.iterrows()
-                ]
-                # Cache back into session_state so subsequent checks short-circuit
-                st.session_state["holdings_rows"] = rows
-                source = "database (from previous visit)"
         if rows is None and LOCAL_HOLDINGS_PATH.exists():
             try:
                 with open(LOCAL_HOLDINGS_PATH, "r", encoding="utf-8") as f:
                     rows = parse_holdings_yaml(f.read())
+                st.session_state["holdings_rows"] = rows
                 source = "local config/holdings.yaml"
             except Exception as e:
                 st.error(f"Could not read local holdings.yaml: {e}")
@@ -507,44 +505,45 @@ def _ensure_holdings_loaded() -> bool:
             st.info("👆 Paste your YAML in the **Paste** tab and click **Apply**.")
             return False
 
-        # Sync + recompute only if holdings actually changed (signature includes
-        # ticker and shares so changes to either trigger a recompute).
+        # Track when holdings change (signature includes ticker and shares) so a
+        # fresh price fetch is triggered for any newly added tickers.
         rows_sig = repr(sorted([(r.get("ticker"), r.get("shares")) for r in rows]))
         if st.session_state.get("holdings_sig") != rows_sig:
-            sync_holdings_from_rows(rows)
             st.session_state["holdings_sig"] = rows_sig
             st.session_state["holdings_changed"] = True
-            get_holdings.clear()
 
         st.caption(f"Source: {source} · {len(rows)} tickers")
         return True
 
 
 def _ensure_prices_loaded(tickers: list[str]) -> None:
-    """Make sure prices and daily_totals match the current holdings.
+    """Make sure the shared price cache covers this session's tickers.
 
-    1. Fetch yfinance data for any ticker that has no prices in the DB.
-    2. Recompute daily_totals if (a) holdings changed since last run, or
-       (b) any ticker was missing prices. This wipes stale rows for
-       previously-held tickers and updates `shares` to current values.
+    Prices and FX are public market data shared across all sessions, so we only
+    fetch tickers that are missing from the `prices` table. Per-session daily
+    totals are computed in-memory in main() from these prices × the session's
+    holdings — nothing user-specific is written to the shared DB here.
     """
-    needs_recompute = st.session_state.pop("holdings_changed", False)
+    # Clearing the flag keeps it from forcing repeat fetches once handled.
+    st.session_state.pop("holdings_changed", False)
 
     prices_df = load_prices(tickers=tickers)
     have_tickers = set(prices_df["ticker"].unique()) if not prices_df.empty else set()
     missing = [t for t in tickers if t not in have_tickers]
 
     if missing:
-        needs_recompute = True
         fetch_msg = st.empty()
         with st.spinner(f"Fetching prices for {len(missing)} ticker(s) from Yahoo Finance..."):
             try:
-                rows_added = fetch_for_tickers(missing)
-                fx_rows = fetch_fx_rates()
+                fetch_for_tickers(missing)
+                fetch_fx_rates()
             except Exception as e:
                 fetch_msg.error(f"Yahoo Finance fetch failed: {e}")
-                rows_added = 0
-                fx_rows = 0
+
+        # New rows landed in the shared DB; drop the cached reads so this run
+        # (and other sessions) see them.
+        get_prices.clear()
+        get_fx_rates.clear()
 
         # Re-check what we actually got
         prices_after = load_prices(tickers=tickers)
@@ -555,22 +554,6 @@ def _ensure_prices_loaded(tickers: list[str]) -> None:
                 f"Yahoo Finance returned no data for: {', '.join(still_missing)}. "
                 f"Check the ticker symbols (US: plain, TW: append .TW or .TWO)."
             )
-
-    # Also recompute if daily_totals has tickers not in current holdings
-    # (left over from a previous holdings set).
-    totals = load_daily_totals()
-    if not totals.empty:
-        stale_tickers = set(totals["ticker"].unique()) - set(tickers)
-        if stale_tickers:
-            needs_recompute = True
-
-    if needs_recompute:
-        with st.spinner("Recomputing daily totals..."):
-            df = compute_daily_totals()
-            replace_daily_totals(df)
-            get_prices.clear()
-            get_daily_totals.clear()
-            get_fx_rates.clear()
 
 
 def attach_twd_value(totals: pd.DataFrame, fx: pd.DataFrame) -> pd.DataFrame:
@@ -658,21 +641,26 @@ def stacked_twd_long(totals_twd: pd.DataFrame) -> pd.DataFrame:
 
 
 def refresh_all() -> str:
-    holdings = load_holdings()
+    """Re-fetch the latest prices/FX for THIS session's holdings into the shared
+    price cache, then drop the cached reads so the new data shows immediately.
+    Totals are recomputed in-memory on the next render — no user data is written
+    to the shared DB.
+    """
+    holdings = session_holdings()
     if holdings.empty:
         return "No holdings to fetch."
-    fetch_for_tickers(holdings["ticker"].tolist())
+    tickers = holdings["ticker"].tolist()
+    fetch_for_tickers(tickers)
     fetch_fx_rates()
-    df = compute_daily_totals()
-    replace_daily_totals(df)
-    st.cache_data.clear()
-    return f"Refreshed {len(holdings)} holdings, {len(df)} total rows."
+    get_prices.clear()
+    get_fx_rates.clear()
+    return f"Refreshed prices for {len(tickers)} holdings."
 
 
 def _wipe_all_holdings_data() -> None:
-    """Clear everything tied to the user's holdings: session state, DB tables,
-    and the in-memory cache. Used by the explicit Clear button and by the
-    fresh-page-load guard so refreshes leave no traces.
+    """Clear this session's holdings. Only session state is touched — the shared
+    `prices`/`fx_rates` cache is public market data and is left intact, and no
+    holdings/totals are stored in the shared DB anymore.
     """
     for key in (
         "holdings_rows",
@@ -681,9 +669,6 @@ def _wipe_all_holdings_data() -> None:
         "holdings_changed",
     ):
         st.session_state.pop(key, None)
-    replace_holdings([])
-    replace_daily_totals(pd.DataFrame())
-    st.cache_data.clear()
 
 
 def main() -> None:
@@ -745,22 +730,27 @@ def main() -> None:
 
         st.divider()
 
-    holdings = get_holdings()
+    holdings = session_holdings()
     if holdings.empty:
         st.warning("No holdings loaded. Upload your `holdings.yaml` from the sidebar.")
         return
 
-    # Auto-fetch prices if the DB is empty (e.g. first run on Streamlit Cloud).
+    # Fetch any tickers missing from the shared price cache (e.g. first run on
+    # Streamlit Cloud, or a newly added ticker).
     _ensure_prices_loaded(holdings["ticker"].tolist())
 
     start_s = start_d.isoformat()
     end_s = end_d.isoformat()
-    totals = get_daily_totals(start_s, end_s)
     prices = get_prices(tuple(holdings["ticker"].tolist()), start_s, end_s)
     fx = get_fx_rates("USDTWD")
 
+    # Compute this session's daily totals in-memory: shared prices × this
+    # session's holdings. Never read/written from the shared DB, so each user
+    # sees only their own portfolio.
+    totals = compute_daily_totals(holdings=holdings, prices=prices)
+
     if totals.empty:
-        st.info("No price data yet. Click **🔄 Refresh prices** in the sidebar to fetch.")
+        st.info("No price data yet. Click **🔄 Refresh prices** beside the title to fetch.")
         return
 
     totals_twd = attach_twd_value(totals, fx)

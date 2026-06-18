@@ -13,14 +13,29 @@ from db import (
 )
 
 
-def compute_daily_totals() -> pd.DataFrame:
-    holdings = load_holdings()
-    if holdings.empty:
-        return pd.DataFrame(columns=["date", "ticker", "close_price", "shares", "value", "currency"])
+EMPTY_COLUMNS = ["date", "ticker", "close_price", "shares", "value", "currency"]
 
-    prices = load_prices(tickers=holdings["ticker"].tolist())
+
+def compute_daily_totals(
+    holdings: pd.DataFrame | None = None,
+    prices: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """Compute close_price * shares per ticker per day.
+
+    Both `holdings` and `prices` can be passed in for an in-memory, per-session
+    computation (used by the multi-user web app so nothing is read from the
+    shared DB). When omitted they fall back to the shared DB tables, which is
+    what the CLI scripts rely on.
+    """
+    if holdings is None:
+        holdings = load_holdings()
+    if holdings.empty:
+        return pd.DataFrame(columns=EMPTY_COLUMNS)
+
+    if prices is None:
+        prices = load_prices(tickers=holdings["ticker"].tolist())
     if prices.empty:
-        return pd.DataFrame(columns=["date", "ticker", "close_price", "shares", "value", "currency"])
+        return pd.DataFrame(columns=EMPTY_COLUMNS)
 
     merged = prices.merge(
         holdings[["ticker", "shares", "currency"]],
