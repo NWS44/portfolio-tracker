@@ -8,3 +8,6 @@ pandas>=2.0.0,<3.0.0
 PyYAML>=6.0
 streamlit>=1.30.0
 plotly>=5.18.0
+# Per-browser persistence of holdings (localStorage). Keeps a returning
+# visitor's portfolio across reloads without a shared server-side store.
+streamlit-local-storage==0.0.25

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import sys
 from datetime import date, timedelta
 from pathlib import Path
@@ -12,6 +13,7 @@ import plotly.graph_objects as go
 import plotly.io as pio
 import streamlit as st
 from plotly.subplots import make_subplots
+from streamlit_local_storage import LocalStorage
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
@@ -357,6 +359,35 @@ THEMES = {
 
 HOLDINGS_COLUMNS = ["ticker", "market", "shares", "cost_basis", "currency"]
 
+# Browser localStorage key. Holdings are persisted here (per browser, JSON of
+# the parsed rows) so a returning visitor keeps their portfolio across reloads.
+# localStorage is per-browser, so this preserves the multi-user isolation:
+# each visitor only ever restores their OWN saved holdings.
+LS_HOLDINGS_KEY = "portfolio_holdings_json"
+
+
+def save_holdings_to_browser(ls: LocalStorage, rows: list[dict]) -> None:
+    """Persist holdings to this browser's localStorage."""
+    ls.setItem(LS_HOLDINGS_KEY, json.dumps(rows), key="ls_save_holdings")
+
+
+def load_holdings_from_browser(ls: LocalStorage) -> list[dict] | None:
+    """Read holdings back from localStorage; None if nothing saved/parseable."""
+    stored = ls.getItem(LS_HOLDINGS_KEY)
+    if not stored:
+        return None
+    try:
+        rows = json.loads(stored)
+        return rows or None
+    except (ValueError, TypeError):
+        return None
+
+
+def clear_holdings_in_browser(ls: LocalStorage) -> None:
+    """Remove the persisted holdings from this browser's localStorage."""
+    if ls.getItem(LS_HOLDINGS_KEY) is not None:  # deleteItem KeyErrors if absent
+        ls.deleteItem(LS_HOLDINGS_KEY, key="ls_clear_holdings")
+
 
 # IMPORTANT (multi-user): holdings are PER SESSION, never read from the shared
 # DB. Streamlit's `st.cache_data` and the SQLite file are both process-global —
@@ -406,11 +437,14 @@ TEMPLATE_YAML = (
 )
 
 
-def _ensure_holdings_loaded() -> bool:
-    """Resolve holdings source: paste / upload → this session → local file.
+def _ensure_holdings_loaded(ls: LocalStorage) -> bool:
+    """Resolve holdings source: paste / upload → this session → this browser's
+    localStorage → local file.
     Returns True if holdings are present in `st.session_state` for this session.
-    Holdings are kept per session only (never in the shared DB) so concurrent
-    users on the same Streamlit Cloud container don't see each other's data.
+    Holdings are kept per session/per browser only (never in the shared DB) so
+    concurrent users on the same Streamlit Cloud container don't see each
+    other's data; localStorage is per-browser so a returning visitor keeps
+    their own portfolio across reloads.
     Mobile-friendly: file uploaders are flaky on iOS Safari, so a paste
     text-area is provided as the primary input.
     """
@@ -483,14 +517,20 @@ def _ensure_holdings_loaded() -> bool:
                     st.error(f"Could not parse uploaded file: {e}")
                     return False
 
-        # Fall back to this session's earlier upload, then (dev only) the local
-        # YAML. We deliberately do NOT read holdings from the shared DB: on
-        # Streamlit Cloud every visitor shares one container, so a DB fallback
-        # would show one user another user's portfolio. Holdings live only in
-        # this browser session.
+        # Fall back to this session's earlier upload, then this browser's
+        # localStorage (a returning visitor's saved portfolio), then (dev only)
+        # the local YAML. We deliberately do NOT read holdings from the shared
+        # DB: on Streamlit Cloud every visitor shares one container, so a DB
+        # fallback would show one user another user's portfolio.
         if rows is None and "holdings_rows" in st.session_state:
             rows = st.session_state["holdings_rows"]
             source = "session (loaded earlier)"
+        if rows is None:
+            restored = load_holdings_from_browser(ls)
+            if restored:
+                rows = restored
+                st.session_state["holdings_rows"] = rows
+                source = "saved in this browser"
         if rows is None and LOCAL_HOLDINGS_PATH.exists():
             try:
                 with open(LOCAL_HOLDINGS_PATH, "r", encoding="utf-8") as f:
@@ -505,12 +545,14 @@ def _ensure_holdings_loaded() -> bool:
             st.info("👆 Paste your YAML in the **Paste** tab and click **Apply**.")
             return False
 
-        # Track when holdings change (signature includes ticker and shares) so a
-        # fresh price fetch is triggered for any newly added tickers.
+        # When holdings change (signature includes ticker and shares): trigger a
+        # fresh price fetch for any new tickers, and persist to this browser so
+        # the portfolio survives a reload / return visit.
         rows_sig = repr(sorted([(r.get("ticker"), r.get("shares")) for r in rows]))
         if st.session_state.get("holdings_sig") != rows_sig:
             st.session_state["holdings_sig"] = rows_sig
             st.session_state["holdings_changed"] = True
+            save_holdings_to_browser(ls, rows)
 
         st.caption(f"Source: {source} · {len(rows)} tickers")
         return True
@@ -674,6 +716,18 @@ def _wipe_all_holdings_data() -> None:
 def main() -> None:
     init_db()
 
+    # Per-browser persistence. Instantiating LocalStorage mounts a hidden
+    # component that loads all stored items (blocking briefly on first run),
+    # so getItem/setItem work for the rest of this run.
+    ls = LocalStorage()
+
+    # A pending clear is handled here — before holdings are resolved — so the
+    # localStorage delete renders in a normally-completing run (deleting inside
+    # the button handler then st.rerun() would abort before the delete is sent).
+    if st.session_state.pop("pending_clear", False):
+        _wipe_all_holdings_data()
+        clear_holdings_in_browser(ls)
+
     # Theme menu lives at the very top of the sidebar so it applies even
     # before any holdings are loaded.
     with st.sidebar:
@@ -703,11 +757,11 @@ def main() -> None:
         controls_slot = st.empty()
 
     # Holdings input renders below the reserved slot.
-    if not _ensure_holdings_loaded():
+    if not _ensure_holdings_loaded(ls):
         return
 
     with st.sidebar:
-        st.caption("Holdings stay in your browser session only.")
+        st.caption("Holdings are saved in your browser only (this device).")
 
     today = date.today()
     default_start = today - timedelta(days=365)
@@ -717,7 +771,9 @@ def main() -> None:
     with controls_slot.container():
         st.header("Controls")
         if st.button("🗑️ Clear holdings", use_container_width=True, type="secondary"):
-            _wipe_all_holdings_data()
+            # Defer to the top-of-run handler so the localStorage delete is sent
+            # before this session re-resolves (and re-saves) holdings.
+            st.session_state["pending_clear"] = True
             st.rerun()
 
         date_range = st.date_input(

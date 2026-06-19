@@ -251,6 +251,45 @@ def test_in_memory_compute_isolates_two_sessions(tmp_db):
 
 
 # --------------------------------------------------------------------------
+# Browser-localStorage persistence (load_holdings_from_browser) — must turn a
+# stored value back into rows, and crucially treat an absent / cleared key as
+# "no holdings". The streamlit-local-storage component's deleteItem leaves the
+# string "null" behind rather than removing the key, so that must read as empty
+# or a cleared portfolio would silently come back.
+# --------------------------------------------------------------------------
+
+class _StubStorage:
+    """Minimal stand-in for streamlit_local_storage.LocalStorage."""
+
+    def __init__(self, value):
+        self._value = value
+
+    def getItem(self, key):
+        return self._value
+
+
+@pytest.mark.parametrize(
+    "stored, expected_tickers",
+    [
+        ('[{"ticker": "AAPL", "market": "US", "shares": 50, "cost_basis": 150, "currency": "USD"}]', ["AAPL"]),
+        ("null", None),          # deleteItem leaves this behind
+        (None, None),            # key never set
+        ("", None),              # empty string
+        ("[]", None),            # empty list → no holdings
+        ("not json{", None),     # malformed → ignored, not a crash
+    ],
+)
+def test_load_holdings_from_browser(stored, expected_tickers):
+    import app  # noqa: E402  (imported lazily; pulls in streamlit at module load)
+
+    rows = app.load_holdings_from_browser(_StubStorage(stored))
+    if expected_tickers is None:
+        assert rows is None
+    else:
+        assert [r["ticker"] for r in rows] == expected_tickers
+
+
+# --------------------------------------------------------------------------
 # replace_daily_totals — wipes the table before inserting, so stale rows
 # from a previous holdings set disappear.
 # --------------------------------------------------------------------------
