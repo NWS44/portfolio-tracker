@@ -1487,7 +1487,14 @@ def main() -> None:
             ],
         )
 
-        st.dataframe(styled, use_container_width=True, hide_index=True)
+        st.dataframe(
+            styled,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "ticker": st.column_config.Column(pinned=True),
+            },
+        )
 
         pie_df = view[view["market_value_twd"].notna() & (view["market_value_twd"] > 0)].copy()
         if not pie_df.empty:
