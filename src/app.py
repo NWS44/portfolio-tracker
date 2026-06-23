@@ -796,6 +796,7 @@ HOLDINGS_COLUMNS = ["ticker", "market", "shares", "cost_basis", "currency"]
 # localStorage is per-browser, so this preserves the multi-user isolation:
 # each visitor only ever restores their OWN saved holdings.
 LS_HOLDINGS_KEY = "portfolio_holdings_json"
+LS_THEME_KEY = "portfolio_theme"
 
 
 def save_holdings_to_browser(ls: LocalStorage, rows: list[dict]) -> None:
@@ -819,6 +820,17 @@ def clear_holdings_in_browser(ls: LocalStorage) -> None:
     """Remove the persisted holdings from this browser's localStorage."""
     if ls.getItem(LS_HOLDINGS_KEY) is not None:  # deleteItem KeyErrors if absent
         ls.deleteItem(LS_HOLDINGS_KEY, key="ls_clear_holdings")
+
+
+def load_theme_from_browser(ls: LocalStorage) -> str | None:
+    """Read the saved theme name from this browser's localStorage."""
+    stored = ls.getItem(LS_THEME_KEY)
+    return stored if isinstance(stored, str) and stored in THEMES else None
+
+
+def save_theme_to_browser(ls: LocalStorage, theme_name: str) -> None:
+    """Persist the selected theme to this browser's localStorage."""
+    ls.setItem(LS_THEME_KEY, theme_name, key="ls_save_theme")
 
 
 # IMPORTANT (multi-user): holdings are PER SESSION, never read from the shared
@@ -1164,6 +1176,13 @@ def main() -> None:
     # `theme` (title, columns). The selectbox itself is rendered below
     # inside the main top bar — CSS injected via st.markdown still applies
     # globally regardless of where the <style> tag sits in the DOM.
+    # First visit in this session: hydrate the widget's session_state from
+    # this browser's localStorage so the saved theme survives reloads.
+    if "ui_theme" not in st.session_state:
+        saved_theme = load_theme_from_browser(ls)
+        if saved_theme:
+            st.session_state["ui_theme"] = saved_theme
+
     theme_name = st.session_state.get("ui_theme", next(iter(THEMES)))
     if theme_name not in THEMES:
         theme_name = next(iter(THEMES))
@@ -1179,11 +1198,15 @@ def main() -> None:
         st.title(theme["title"])
         st.caption("US + TW daily prices · holdings × close → daily portfolio value (TWD combined)")
     with theme_col:
+        def _persist_theme() -> None:
+            save_theme_to_browser(ls, st.session_state["ui_theme"])
+
         st.selectbox(
             "🎨 Theme",
             list(THEMES),
             key="ui_theme",
             label_visibility="collapsed",
+            on_change=_persist_theme,
         )
     with refresh_col:
         if st.button("🔄 Refresh prices", use_container_width=True):
