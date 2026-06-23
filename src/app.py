@@ -293,6 +293,358 @@ h3 { font-size: 1.05rem !important; }
 </style>
 """
 
+# ---------------------------------------------------------------------------
+# Solarized Light theme: easy-on-the-eyes paper look. Cream background, olive
+# text, blue/orange accents. Lora serif for headings, Source Sans for body,
+# JetBrains Mono for numbers. Light theme — needs explicit dark text overrides.
+# ---------------------------------------------------------------------------
+SOL_BG = "#fdf6e3"
+SOL_PANEL = "#eee8d5"
+SOL_INK = "#586e75"
+SOL_HEAD = "#073642"
+SOL_GREEN = "#859900"
+SOL_RED = "#dc322f"
+SOL_BLUE = "#268bd2"
+SOL_COLORWAY = [
+    "#268bd2", "#cb4b16", "#859900", "#d33682", "#6c71c4",
+    "#2aa198", "#b58900", "#dc322f", "#586e75", "#93a1a1",
+]
+
+SOLARIZED_CSS = """
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Lora:wght@500;600;700&family=Source+Sans+3:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
+
+html, body, .stApp, [data-testid="stAppViewContainer"] { background: #fdf6e3; color: #586e75; }
+[data-testid="stHeader"] { background: #fdf6e3; }
+[data-testid="stSidebar"] {
+    background: #eee8d5;
+    border-right: 1px solid #93a1a1;
+}
+
+html, body, .stMarkdown, .stCaption, [data-testid="stWidgetLabel"] p,
+.stRadio label, .stToggle label, .stMultiSelect label {
+    font-family: 'Source Sans 3', sans-serif !important;
+    color: #586e75 !important;
+}
+.stDataFrame, .stTextArea textarea, code, pre, [data-testid="stMetricValue"], [data-testid="stMetricDelta"] {
+    font-family: 'JetBrains Mono', monospace !important;
+}
+
+h1, h2, h3 {
+    font-family: 'Lora', serif !important;
+    color: #073642 !important;
+    text-shadow: none;
+    letter-spacing: 0;
+}
+h1 { font-size: 2rem !important; font-weight: 700 !important; }
+h2 { font-size: 1.3rem !important; font-weight: 600 !important; }
+h3 { font-size: 1.05rem !important; font-weight: 600 !important; }
+
+[data-testid="stMetric"] {
+    background: #eee8d5;
+    border: 1px solid #93a1a1;
+    border-top: 3px solid #268bd2;
+    border-radius: 2px;
+    padding: 14px 16px;
+    margin-bottom: 10px;
+    box-shadow: none;
+}
+[data-testid="stMetricLabel"] p {
+    font-family: 'Source Sans 3', sans-serif !important;
+    font-size: 0.75rem !important;
+    font-weight: 600 !important;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: #93a1a1 !important;
+}
+[data-testid="stMetricValue"] {
+    font-size: 1.85rem !important;
+    color: #073642 !important;
+}
+
+.stButton > button, .stDownloadButton > button {
+    font-family: 'Source Sans 3', sans-serif !important;
+    font-weight: 600 !important;
+    background: #fdf6e3 !important;
+    color: #268bd2 !important;
+    border: 1px solid #268bd2 !important;
+    border-radius: 2px !important;
+    box-shadow: none;
+}
+.stButton > button:hover {
+    background: #268bd2 !important;
+    color: #fdf6e3 !important;
+}
+.stButton > button[kind="primary"] {
+    background: #cb4b16 !important;
+    color: #fdf6e3 !important;
+    border-color: #cb4b16 !important;
+}
+
+.stTabs [data-baseweb="tab"] {
+    font-family: 'Lora', serif !important;
+    font-size: 0.95rem !important;
+    color: #93a1a1;
+}
+.stTabs [aria-selected="true"] { color: #073642 !important; }
+.stTabs [data-baseweb="tab-highlight"] { background-color: #268bd2; }
+
+.stTextArea textarea, [data-baseweb="select"] > div, [data-testid="stDateInput"] input {
+    background-color: #fdf6e3 !important;
+    border-color: #93a1a1 !important;
+    color: #586e75 !important;
+}
+</style>
+"""
+
+# ---------------------------------------------------------------------------
+# Cyberpunk theme: deep violet-black, magenta + cyan neon, Orbitron headings,
+# heavy glow. Sleeker / sharper than the pixel-art Retro Arcade.
+# ---------------------------------------------------------------------------
+CP_BG = "#0a0014"
+CP_PANEL = "#1a0033"
+CP_MAGENTA = "#ff00ff"
+CP_CYAN = "#00ffff"
+CP_UP = "#39ff14"
+CP_DOWN = "#ff0055"
+CP_COLORWAY = [
+    "#ff00ff", "#00ffff", "#39ff14", "#ff0055", "#fffb00",
+    "#ff8c00", "#bd00ff", "#00ff7f", "#ff1493", "#1e90ff",
+]
+
+CYBERPUNK_CSS = """
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Rajdhani:wght@400;500;600;700&display=swap');
+
+html, body, .stApp, [data-testid="stAppViewContainer"] {
+    background: radial-gradient(ellipse at top, #1a0033 0%, #0a0014 70%);
+}
+[data-testid="stHeader"] { background: #0a0014; }
+[data-testid="stSidebar"] {
+    background: #100020;
+    border-right: 1px solid #ff00ff;
+    box-shadow: 0 0 20px rgba(255, 0, 255, 0.3);
+}
+
+html, body, .stMarkdown, .stCaption, [data-testid="stWidgetLabel"] p,
+.stRadio label, .stToggle label {
+    font-family: 'Rajdhani', sans-serif !important;
+    color: #e0d4ff !important;
+    font-size: 1.02rem;
+}
+.stDataFrame, .stTextArea textarea, code, pre, [data-testid="stMetricValue"], [data-testid="stMetricDelta"] {
+    font-family: 'Rajdhani', sans-serif !important;
+    font-weight: 600 !important;
+}
+
+h1, h2, h3 {
+    font-family: 'Orbitron', sans-serif !important;
+    color: #00ffff !important;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    text-shadow: 0 0 6px rgba(0, 255, 255, 0.8), 0 0 14px rgba(255, 0, 255, 0.5);
+}
+h1 { font-size: 1.9rem !important; font-weight: 900 !important; }
+h2 { font-size: 1.2rem !important; font-weight: 700 !important; }
+h3 { font-size: 1rem !important; font-weight: 700 !important; }
+
+[data-testid="stMetric"] {
+    background: linear-gradient(135deg, rgba(26,0,51,0.9), rgba(10,0,20,0.9));
+    border: 1px solid #ff00ff;
+    border-radius: 0;
+    padding: 14px 16px;
+    margin-bottom: 10px;
+    box-shadow: 0 0 10px rgba(255, 0, 255, 0.4), inset 0 0 20px rgba(0, 255, 255, 0.05);
+    clip-path: polygon(0 0, calc(100% - 12px) 0, 100% 12px, 100% 100%, 12px 100%, 0 calc(100% - 12px));
+}
+[data-testid="stMetricLabel"] p {
+    font-family: 'Orbitron', sans-serif !important;
+    font-size: 0.65rem !important;
+    font-weight: 700 !important;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: #ff00ff !important;
+    text-shadow: 0 0 4px rgba(255, 0, 255, 0.6);
+}
+[data-testid="stMetricValue"] {
+    font-size: 2.1rem !important;
+    color: #00ffff !important;
+    text-shadow: 0 0 8px rgba(0, 255, 255, 0.6);
+}
+
+.stButton > button, .stDownloadButton > button {
+    font-family: 'Orbitron', sans-serif !important;
+    font-weight: 700 !important;
+    font-size: 0.78rem !important;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    background: transparent !important;
+    color: #00ffff !important;
+    border: 1px solid #00ffff !important;
+    border-radius: 0 !important;
+    box-shadow: 0 0 8px rgba(0, 255, 255, 0.5), inset 0 0 8px rgba(0, 255, 255, 0.1);
+    transition: all 0.15s;
+}
+.stButton > button:hover {
+    background: #00ffff !important;
+    color: #0a0014 !important;
+    box-shadow: 0 0 16px #00ffff;
+}
+.stButton > button[kind="primary"] {
+    color: #ff00ff !important;
+    border-color: #ff00ff !important;
+    box-shadow: 0 0 8px rgba(255, 0, 255, 0.6);
+}
+.stButton > button[kind="primary"]:hover {
+    background: #ff00ff !important;
+    color: #0a0014 !important;
+}
+
+.stTabs [data-baseweb="tab"] {
+    font-family: 'Orbitron', sans-serif !important;
+    font-weight: 700 !important;
+    font-size: 0.75rem !important;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #8b7fb5;
+}
+.stTabs [aria-selected="true"] {
+    color: #ff00ff !important;
+    text-shadow: 0 0 6px rgba(255, 0, 255, 0.7);
+}
+.stTabs [data-baseweb="tab-highlight"] { background-color: #ff00ff; }
+
+.stTextArea textarea, [data-baseweb="select"] > div, [data-testid="stDateInput"] input {
+    background-color: #100020 !important;
+    border-color: #ff00ff !important;
+    color: #e0d4ff !important;
+}
+</style>
+"""
+
+# ---------------------------------------------------------------------------
+# Broadsheet theme: vintage financial newspaper. Cream paper, deep red accent,
+# Playfair Display serif headings, double-rule borders. Classic WSJ broadsheet.
+# ---------------------------------------------------------------------------
+BS_BG = "#f5f1e8"
+BS_PANEL = "#ebe5d3"
+BS_INK = "#1a1a1a"
+BS_ACCENT = "#8b0000"
+BS_GREEN = "#1f6b1f"
+BS_RED = "#8b0000"
+BS_COLORWAY = [
+    "#8b0000", "#1f6b1f", "#1c4587", "#a85d2c", "#5d4e75",
+    "#7a5230", "#2f4f4f", "#8b3a62", "#556b2f", "#4b3621",
+]
+
+BROADSHEET_CSS = """
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700;900&family=PT+Serif:wght@400;700&family=Old+Standard+TT:wght@400;700&display=swap');
+
+html, body, .stApp, [data-testid="stAppViewContainer"] { background: #f5f1e8; color: #1a1a1a; }
+[data-testid="stHeader"] { background: #f5f1e8; }
+[data-testid="stSidebar"] {
+    background: #ebe5d3;
+    border-right: 2px double #1a1a1a;
+}
+
+html, body, .stMarkdown, .stCaption, [data-testid="stWidgetLabel"] p,
+.stRadio label, .stToggle label, .stMultiSelect label {
+    font-family: 'PT Serif', serif !important;
+    color: #1a1a1a !important;
+}
+.stDataFrame, .stTextArea textarea, code, pre {
+    font-family: 'PT Serif', serif !important;
+    color: #1a1a1a !important;
+}
+
+h1, h2, h3 {
+    font-family: 'Playfair Display', serif !important;
+    color: #1a1a1a !important;
+    text-shadow: none;
+    letter-spacing: -0.01em;
+}
+h1 {
+    font-size: 2.6rem !important;
+    font-weight: 900 !important;
+    border-bottom: 3px double #1a1a1a;
+    padding-bottom: 6px;
+    font-style: italic;
+}
+h2 { font-size: 1.4rem !important; font-weight: 700 !important; }
+h3 { font-size: 1.1rem !important; font-weight: 700 !important; font-style: italic; }
+
+[data-testid="stMetric"] {
+    background: #ebe5d3;
+    border: 1px solid #1a1a1a;
+    border-top: 3px double #1a1a1a;
+    border-bottom: 3px double #1a1a1a;
+    border-radius: 0;
+    padding: 14px 16px;
+    margin-bottom: 10px;
+    box-shadow: none;
+}
+[data-testid="stMetricLabel"] p {
+    font-family: 'Old Standard TT', serif !important;
+    font-size: 0.78rem !important;
+    font-weight: 700 !important;
+    text-transform: uppercase;
+    letter-spacing: 0.15em;
+    color: #4a4a4a !important;
+}
+[data-testid="stMetricValue"] {
+    font-family: 'Playfair Display', serif !important;
+    font-size: 2rem !important;
+    font-weight: 700 !important;
+    color: #1a1a1a !important;
+}
+[data-testid="stMetricDelta"] {
+    font-family: 'PT Serif', serif !important;
+    font-size: 0.95rem !important;
+}
+
+.stButton > button, .stDownloadButton > button {
+    font-family: 'Old Standard TT', serif !important;
+    font-weight: 700 !important;
+    font-size: 0.85rem !important;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    background: #f5f1e8 !important;
+    color: #1a1a1a !important;
+    border: 1px solid #1a1a1a !important;
+    border-radius: 0 !important;
+    box-shadow: 2px 2px 0 #1a1a1a;
+}
+.stButton > button:hover {
+    background: #1a1a1a !important;
+    color: #f5f1e8 !important;
+}
+.stButton > button[kind="primary"] {
+    background: #8b0000 !important;
+    color: #f5f1e8 !important;
+    border-color: #8b0000 !important;
+    box-shadow: 2px 2px 0 #1a1a1a;
+}
+
+.stTabs [data-baseweb="tab"] {
+    font-family: 'Old Standard TT', serif !important;
+    font-weight: 700 !important;
+    font-size: 0.9rem !important;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #4a4a4a;
+}
+.stTabs [aria-selected="true"] { color: #8b0000 !important; }
+.stTabs [data-baseweb="tab-highlight"] { background-color: #8b0000; }
+
+.stTextArea textarea, [data-baseweb="select"] > div, [data-testid="stDateInput"] input {
+    background-color: #f5f1e8 !important;
+    border-color: #1a1a1a !important;
+    color: #1a1a1a !important;
+}
+</style>
+"""
+
 
 def _register_plotly_template(
     name: str,
@@ -333,9 +685,71 @@ _register_plotly_template(
     colorway=EXCH_COLORWAY,
 )
 
+
+def _register_light_plotly_template(
+    name: str,
+    *,
+    paper: str,
+    plot_bg: str,
+    grid: str,
+    font_family: str,
+    font_size: int,
+    font_color: str,
+    colorway: list[str],
+) -> None:
+    t = copy.deepcopy(pio.templates["plotly_white"])
+    t.layout.paper_bgcolor = paper
+    t.layout.plot_bgcolor = plot_bg
+    t.layout.font = dict(family=font_family, size=font_size, color=font_color)
+    t.layout.colorway = colorway
+    t.layout.xaxis.gridcolor = grid
+    t.layout.yaxis.gridcolor = grid
+    pio.templates[name] = t
+
+
+_register_light_plotly_template(
+    "solarized",
+    paper=SOL_BG,
+    plot_bg=SOL_PANEL,
+    grid="#d8d2bf",
+    font_family="JetBrains Mono, monospace",
+    font_size=13,
+    font_color=SOL_INK,
+    colorway=SOL_COLORWAY,
+)
+_register_plotly_template(
+    "cyberpunk",
+    plot_bg="rgba(26,0,51,0.5)",
+    grid="#3a0a5e",
+    font_family="Rajdhani, sans-serif",
+    font_size=14,
+    font_color="#e0d4ff",
+    colorway=CP_COLORWAY,
+)
+_register_light_plotly_template(
+    "broadsheet",
+    paper=BS_BG,
+    plot_bg=BS_PANEL,
+    grid="#bfb89e",
+    font_family="PT Serif, serif",
+    font_size=13,
+    font_color=BS_INK,
+    colorway=BS_COLORWAY,
+)
+
 # Each theme bundles its CSS, plotly template name, gain/loss/accent colors
 # (used by inline-styled values and chart traces), and the title string.
+# Order matters: the first entry is the default selection.
 THEMES = {
+    "📊 Stock Exchange": {
+        "css": EXCHANGE_CSS,
+        "plotly": "exchange",
+        "up": EXCH_GREEN,
+        "down": EXCH_RED,
+        "accent": AMBER,
+        "colorway": EXCH_COLORWAY,
+        "title": "📊 Portfolio Tracker",
+    },
     "🕹️ Retro Arcade": {
         "css": GAME_CSS,
         "plotly": "arcade",
@@ -345,14 +759,32 @@ THEMES = {
         "colorway": NEON_COLORWAY,
         "title": "🕹️ PORTFOLIO TRACKER",
     },
-    "📊 Stock Exchange": {
-        "css": EXCHANGE_CSS,
-        "plotly": "exchange",
-        "up": EXCH_GREEN,
-        "down": EXCH_RED,
-        "accent": AMBER,
-        "colorway": EXCH_COLORWAY,
-        "title": "📊 Portfolio Tracker",
+    "☀️ Solarized Light": {
+        "css": SOLARIZED_CSS,
+        "plotly": "solarized",
+        "up": SOL_GREEN,
+        "down": SOL_RED,
+        "accent": SOL_BLUE,
+        "colorway": SOL_COLORWAY,
+        "title": "☀️ Portfolio Tracker",
+    },
+    "🌌 Cyberpunk": {
+        "css": CYBERPUNK_CSS,
+        "plotly": "cyberpunk",
+        "up": CP_UP,
+        "down": CP_DOWN,
+        "accent": CP_CYAN,
+        "colorway": CP_COLORWAY,
+        "title": "🌌 PORTFOLIO TRACKER",
+    },
+    "📰 Broadsheet": {
+        "css": BROADSHEET_CSS,
+        "plotly": "broadsheet",
+        "up": BS_GREEN,
+        "down": BS_RED,
+        "accent": BS_ACCENT,
+        "colorway": BS_COLORWAY,
+        "title": "📰 The Portfolio Tracker",
     },
 }
 
@@ -728,19 +1160,31 @@ def main() -> None:
         _wipe_all_holdings_data()
         clear_holdings_in_browser(ls)
 
-    # Theme menu lives at the very top of the sidebar so it applies even
-    # before any holdings are loaded.
-    with st.sidebar:
-        theme_name = st.selectbox("🎨 Theme", list(THEMES), key="ui_theme")
+    # Resolve the theme name BEFORE rendering anything that depends on
+    # `theme` (title, columns). The selectbox itself is rendered below
+    # inside the main top bar — CSS injected via st.markdown still applies
+    # globally regardless of where the <style> tag sits in the DOM.
+    theme_name = st.session_state.get("ui_theme", next(iter(THEMES)))
+    if theme_name not in THEMES:
+        theme_name = next(iter(THEMES))
     theme = THEMES[theme_name]
 
     st.markdown(theme["css"], unsafe_allow_html=True)
     pio.templates.default = theme["plotly"]
 
-    title_col, refresh_col, hide_col = st.columns([5, 1.4, 1.4], vertical_alignment="center")
+    title_col, theme_col, refresh_col, hide_col = st.columns(
+        [4, 1.8, 1.4, 1.4], vertical_alignment="center"
+    )
     with title_col:
         st.title(theme["title"])
         st.caption("US + TW daily prices · holdings × close → daily portfolio value (TWD combined)")
+    with theme_col:
+        st.selectbox(
+            "🎨 Theme",
+            list(THEMES),
+            key="ui_theme",
+            label_visibility="collapsed",
+        )
     with refresh_col:
         if st.button("🔄 Refresh prices", use_container_width=True):
             with st.spinner("Fetching from Yahoo Finance..."):
