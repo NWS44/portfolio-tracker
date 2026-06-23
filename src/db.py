@@ -50,6 +50,11 @@ CREATE TABLE IF NOT EXISTS fx_rates (
     PRIMARY KEY (pair, date)
 );
 CREATE INDEX IF NOT EXISTS idx_fx_rates_date ON fx_rates(date);
+
+CREATE TABLE IF NOT EXISTS meta (
+    key    TEXT PRIMARY KEY,
+    value  TEXT NOT NULL
+);
 """
 
 
@@ -257,3 +262,18 @@ def latest_fx_date(pair: str, db_path: Path | None = None) -> str | None:
             "SELECT MAX(date) AS d FROM fx_rates WHERE pair = ?", (pair,)
         ).fetchone()
     return row["d"] if row and row["d"] else None
+
+
+def set_meta(key: str, value: str, db_path: Path | None = None) -> None:
+    with connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO meta(key, value) VALUES(?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (key, value),
+        )
+
+
+def get_meta(key: str, db_path: Path | None = None) -> str | None:
+    with connect(db_path) as conn:
+        row = conn.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+    return row["value"] if row else None

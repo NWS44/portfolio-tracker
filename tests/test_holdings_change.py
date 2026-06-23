@@ -195,6 +195,101 @@ def test_compute_daily_totals_drops_zero_close_rows(tmp_db):
 
 
 # --------------------------------------------------------------------------
+# In-memory compute (multi-user isolation) — compute_daily_totals(holdings,
+# prices) must work purely from its arguments without reading the shared DB,
+# so each browser session can compute its own totals from the shared price
+# cache. This is what fixes the "all users see the last uploaded portfolio"
+# bug: holdings never touch the global DB.
+# --------------------------------------------------------------------------
+
+def _prices_df() -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {"ticker": "VTI", "date": "2026-05-08", "open": 362, "high": 365, "low": 361, "close": 363.0, "volume": 1100},
+            {"ticker": "0050.TW", "date": "2026-05-08", "open": 96, "high": 97, "low": 95, "close": 97.0, "volume": 250},
+            {"ticker": "PLTR", "date": "2026-05-08", "open": 137, "high": 142, "low": 135, "close": 137.8, "volume": 520},
+        ]
+    )
+
+
+def test_in_memory_compute_ignores_db(tmp_db):
+    """Passing holdings + prices computes totals without consulting the DB.
+    The holdings table is empty here, proving nothing is read from it.
+    """
+    holdings = pd.DataFrame(
+        [{"ticker": "VTI", "market": "US", "shares": 10, "cost_basis": 250.0, "currency": "USD"}]
+    )
+
+    df = compute_daily_totals(holdings=holdings, prices=_prices_df())
+
+    assert load_holdings(db_path=tmp_db).empty  # DB untouched
+    assert set(df["ticker"].unique()) == {"VTI"}
+    assert df.iloc[0]["value"] == pytest.approx(10 * 363.0)
+
+
+def test_in_memory_compute_isolates_two_sessions(tmp_db):
+    """The core multi-user property: two sessions sharing the same price data
+    but holding different portfolios get independent totals — neither sees the
+    other's holdings.
+    """
+    shared_prices = _prices_df()
+
+    user_a = pd.DataFrame(
+        [{"ticker": "VTI", "market": "US", "shares": 10, "cost_basis": 250.0, "currency": "USD"}]
+    )
+    user_b = pd.DataFrame(
+        [{"ticker": "PLTR", "market": "US", "shares": 100, "cost_basis": 130.0, "currency": "USD"}]
+    )
+
+    totals_a = compute_daily_totals(holdings=user_a, prices=shared_prices)
+    totals_b = compute_daily_totals(holdings=user_b, prices=shared_prices)
+
+    assert set(totals_a["ticker"].unique()) == {"VTI"}
+    assert set(totals_b["ticker"].unique()) == {"PLTR"}
+    assert totals_a.iloc[0]["value"] == pytest.approx(10 * 363.0)
+    assert totals_b.iloc[0]["value"] == pytest.approx(100 * 137.8)
+
+
+# --------------------------------------------------------------------------
+# Browser-localStorage persistence (load_holdings_from_browser) — must turn a
+# stored value back into rows, and crucially treat an absent / cleared key as
+# "no holdings". The streamlit-local-storage component's deleteItem leaves the
+# string "null" behind rather than removing the key, so that must read as empty
+# or a cleared portfolio would silently come back.
+# --------------------------------------------------------------------------
+
+class _StubStorage:
+    """Minimal stand-in for streamlit_local_storage.LocalStorage."""
+
+    def __init__(self, value):
+        self._value = value
+
+    def getItem(self, key):
+        return self._value
+
+
+@pytest.mark.parametrize(
+    "stored, expected_tickers",
+    [
+        ('[{"ticker": "AAPL", "market": "US", "shares": 50, "cost_basis": 150, "currency": "USD"}]', ["AAPL"]),
+        ("null", None),          # deleteItem leaves this behind
+        (None, None),            # key never set
+        ("", None),              # empty string
+        ("[]", None),            # empty list → no holdings
+        ("not json{", None),     # malformed → ignored, not a crash
+    ],
+)
+def test_load_holdings_from_browser(stored, expected_tickers):
+    import app  # noqa: E402  (imported lazily; pulls in streamlit at module load)
+
+    rows = app.load_holdings_from_browser(_StubStorage(stored))
+    if expected_tickers is None:
+        assert rows is None
+    else:
+        assert [r["ticker"] for r in rows] == expected_tickers
+
+
+# --------------------------------------------------------------------------
 # replace_daily_totals — wipes the table before inserting, so stale rows
 # from a previous holdings set disappear.
 # --------------------------------------------------------------------------

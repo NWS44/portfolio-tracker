@@ -21,6 +21,7 @@ from db import (
     latest_price_date,
     load_holdings,
     replace_holdings,
+    set_meta,
     upsert_fx_rates,
     upsert_prices,
 )
@@ -32,6 +33,12 @@ FX_TICKERS = {
 # Re-fetch a small window before the last stored date so late corrections
 # (split/dividend adjustments, late prints) overwrite stale rows.
 INCREMENTAL_LOOKBACK_DAYS = 3
+
+
+def _taipei_now_str() -> str:
+    """Return current Taipei time as 'YYYY-MM-DD HH:MM' (24hr)."""
+    tz = ZoneInfo("Asia/Taipei") if ZoneInfo is not None else timezone(timedelta(hours=8))
+    return datetime.now(tz).strftime("%Y-%m-%d %H:%M")
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_HOLDINGS = ROOT / "config" / "holdings.yaml"
@@ -192,6 +199,7 @@ def fetch_fx_rates(
         total += n
         print(f"[ok]   FX {pair}: {n} rows ({out['date'].min()} → {out['date'].max()})")
 
+    set_meta("last_fx_fetch", _taipei_now_str())
     return total
 
 
@@ -255,6 +263,7 @@ def fetch_for_tickers(
         total += n
         print(f"[ok]   {t}: {n} rows ({df['date'].min()} → {df['date'].max()})")
 
+    set_meta("last_price_fetch", _taipei_now_str())
     return total
 
 

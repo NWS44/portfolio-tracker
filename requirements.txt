@@ -1,5 +1,13 @@
-yfinance>=0.2.40
-pandas>=2.0.0
+# Pin yfinance to the last known-good version. 1.4.0 silently returns no
+# data on Streamlit Cloud (likely Yahoo anti-scraping change).
+yfinance==1.3.0
+# curl_cffi enables yfinance's anti-detection HTTP session (Yahoo blocks
+# default requests UA on shared cloud IPs). Required by 1.x.
+curl_cffi>=0.7.0
+pandas>=2.0.0,<3.0.0
 PyYAML>=6.0
 streamlit>=1.30.0
 plotly>=5.18.0
+# Per-browser persistence of holdings (localStorage). Keeps a returning
+# visitor's portfolio across reloads without a shared server-side store.
+streamlit-local-storage==0.0.25
