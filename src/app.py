@@ -797,6 +797,7 @@ HOLDINGS_COLUMNS = ["ticker", "market", "shares", "cost_basis", "currency"]
 # each visitor only ever restores their OWN saved holdings.
 LS_HOLDINGS_KEY = "portfolio_holdings_json"
 LS_THEME_KEY = "portfolio_theme"
+LS_HIDE_SUMMARY_KEY = "portfolio_hide_summary"
 
 
 def save_holdings_to_browser(ls: LocalStorage, rows: list[dict]) -> None:
@@ -831,6 +832,19 @@ def load_theme_from_browser(ls: LocalStorage) -> str | None:
 def save_theme_to_browser(ls: LocalStorage, theme_name: str) -> None:
     """Persist the selected theme to this browser's localStorage."""
     ls.setItem(LS_THEME_KEY, theme_name, key="ls_save_theme")
+
+
+def load_hide_summary_from_browser(ls: LocalStorage) -> bool | None:
+    """Read the saved Hide-totals flag from this browser's localStorage."""
+    stored = ls.getItem(LS_HIDE_SUMMARY_KEY)
+    if stored is None:
+        return None
+    return str(stored).lower() == "true"
+
+
+def save_hide_summary_to_browser(ls: LocalStorage, hide: bool) -> None:
+    """Persist the Hide-totals toggle to this browser's localStorage."""
+    ls.setItem(LS_HIDE_SUMMARY_KEY, "true" if hide else "false", key="ls_save_hide_summary")
 
 
 # IMPORTANT (multi-user): holdings are PER SESSION, never read from the shared
@@ -1214,7 +1228,20 @@ def main() -> None:
                 msg = refresh_all()
             st.success(msg)
     with hide_col:
-        hide_summary = st.toggle("Hide totals", value=False, key="hide_summary")
+        if "hide_summary" not in st.session_state:
+            saved_hide = load_hide_summary_from_browser(ls)
+            if saved_hide is not None:
+                st.session_state["hide_summary"] = saved_hide
+
+        def _persist_hide_summary() -> None:
+            save_hide_summary_to_browser(ls, st.session_state["hide_summary"])
+
+        hide_summary = st.toggle(
+            "Hide totals",
+            value=False,
+            key="hide_summary",
+            on_change=_persist_hide_summary,
+        )
 
     # Reserve a slot at the very top of the sidebar for the Controls block.
     # We populate it AFTER _ensure_holdings_loaded() runs so we know whether
