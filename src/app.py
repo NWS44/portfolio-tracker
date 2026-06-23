@@ -26,9 +26,11 @@ from db import (  # noqa: E402
     load_prices,
 )
 from fetch_prices import (  # noqa: E402
+    aggregate_transactions,
     fetch_for_tickers,
     fetch_fx_rates,
     parse_holdings_yaml,
+    parse_transactions_csv,
 )
 
 LOCAL_HOLDINGS_PATH = ROOT / "config" / "holdings.yaml"
@@ -796,6 +798,7 @@ HOLDINGS_COLUMNS = ["ticker", "market", "shares", "cost_basis", "currency"]
 # localStorage is per-browser, so this preserves the multi-user isolation:
 # each visitor only ever restores their OWN saved holdings.
 LS_HOLDINGS_KEY = "portfolio_holdings_json"
+LS_TRANSACTIONS_KEY = "portfolio_transactions_csv"
 LS_THEME_KEY = "portfolio_theme"
 LS_HIDE_SUMMARY_KEY = "portfolio_hide_summary"
 
@@ -818,9 +821,24 @@ def load_holdings_from_browser(ls: LocalStorage) -> list[dict] | None:
 
 
 def clear_holdings_in_browser(ls: LocalStorage) -> None:
-    """Remove the persisted holdings from this browser's localStorage."""
+    """Remove the persisted holdings (both YAML rows and CSV transactions)
+    from this browser's localStorage."""
     if ls.getItem(LS_HOLDINGS_KEY) is not None:  # deleteItem KeyErrors if absent
         ls.deleteItem(LS_HOLDINGS_KEY, key="ls_clear_holdings")
+    if ls.getItem(LS_TRANSACTIONS_KEY) is not None:
+        ls.deleteItem(LS_TRANSACTIONS_KEY, key="ls_clear_transactions")
+
+
+def save_transactions_to_browser(ls: LocalStorage, csv_text: str) -> None:
+    """Persist the raw transaction CSV text to this browser's localStorage so a
+    returning visitor sees both the derived holdings AND realized P&L."""
+    ls.setItem(LS_TRANSACTIONS_KEY, csv_text, key="ls_save_transactions")
+
+
+def load_transactions_from_browser(ls: LocalStorage) -> str | None:
+    """Read the saved transaction CSV back from localStorage; None if empty."""
+    stored = ls.getItem(LS_TRANSACTIONS_KEY)
+    return stored if isinstance(stored, str) and stored.strip() else None
 
 
 def load_theme_from_browser(ls: LocalStorage) -> str | None:
@@ -894,6 +912,14 @@ TEMPLATE_YAML = (
     "    currency: TWD\n"
 )
 
+TEMPLATE_CSV = (
+    "ticker,market,shares,price,action,date,avg_buy_price\n"
+    "VTI,US,5,240.00,buy,2024-01-15,\n"
+    "VTI,US,5,260.00,buy,2024-06-01,\n"
+    "VTI,US,3,280.00,sell,2024-09-15,250.00\n"
+    "0050.TW,TW,1000,100.00,buy,2023-08-01,\n"
+)
+
 
 def _ensure_holdings_loaded(ls: LocalStorage) -> bool:
     """Resolve holdings source: paste / upload → this session → this browser's
@@ -911,8 +937,15 @@ def _ensure_holdings_loaded(ls: LocalStorage) -> bool:
 
         rows = None
         source = None
+        # Transactions-based input also yields a realized P&L breakdown that
+        # plain YAML/holdings input can't produce; we stash it so the main view
+        # can surface it.
+        realized: list[dict] | None = None
+        # If the active source is the CSV log, we hold onto the raw text so it
+        # can be persisted to this browser's localStorage.
+        applied_csv_text: str | None = None
 
-        tab_paste, tab_upload = st.tabs(["📋 Paste", "📁 Upload"])
+        tab_paste, tab_upload, tab_csv = st.tabs(["📋 Paste", "📁 Upload", "📑 CSV"])
 
         with tab_paste:
             st.caption("Template (tap the copy icon → paste below → edit values):")
@@ -946,6 +979,8 @@ def _ensure_holdings_loaded(ls: LocalStorage) -> bool:
                         rows = None
                     else:
                         st.session_state["holdings_rows"] = rows
+                        st.session_state.pop("realized_pl", None)
+                        applied_csv_text = ""  # clear CSV when YAML is applied
                         source = "pasted"
                 except Exception as e:
                     st.error(f"Could not parse YAML: {e}")
@@ -970,9 +1005,78 @@ def _ensure_holdings_loaded(ls: LocalStorage) -> bool:
                         rows = parsed
                         st.session_state["holdings_rows"] = rows
                         st.session_state["holdings_text"] = content
+                        st.session_state.pop("realized_pl", None)
+                        applied_csv_text = ""
                         source = "uploaded"
                 except Exception as e:
                     st.error(f"Could not parse uploaded file: {e}")
+                    return False
+
+        with tab_csv:
+            st.caption(
+                "Transaction log — one row per buy/sell. Sell rows need the "
+                "**avg_buy_price** of the sold shares so realized P&L can be "
+                "computed."
+            )
+            st.code(TEMPLATE_CSV, language="text")
+
+            csv_text = st.text_area(
+                "Paste your CSV here",
+                height=220,
+                key="transactions_text_input",
+            )
+
+            csv_col_apply, csv_col_load = st.columns(2)
+            with csv_col_apply:
+                apply_csv = st.button(
+                    "Apply",
+                    use_container_width=True,
+                    type="primary",
+                    key="apply_csv_btn",
+                )
+            with csv_col_load:
+                st.button(
+                    "Load template",
+                    use_container_width=True,
+                    key="load_csv_template",
+                    on_click=lambda: st.session_state.update(
+                        transactions_text_input=TEMPLATE_CSV
+                    ),
+                )
+
+            csv_uploaded = st.file_uploader(
+                "…or upload a .csv file",
+                type=["csv", "txt"],
+                accept_multiple_files=False,
+                key="csv_uploader",
+            )
+
+            csv_to_apply: str | None = None
+            if apply_csv and csv_text.strip():
+                csv_to_apply = csv_text
+            elif rows is None and csv_uploaded is not None:
+                csv_to_apply = csv_uploaded.getvalue().decode("utf-8", errors="replace")
+
+            if rows is None and csv_to_apply:
+                try:
+                    txs = parse_transactions_csv(csv_to_apply)
+                    if not txs:
+                        st.error("CSV parsed but no transaction rows found.")
+                    else:
+                        h_rows, realized = aggregate_transactions(txs)
+                        if not h_rows and not realized:
+                            st.error("CSV had no usable transactions.")
+                        else:
+                            rows = h_rows
+                            st.session_state["holdings_rows"] = rows
+                            st.session_state["realized_pl"] = realized
+                            applied_csv_text = csv_to_apply
+                            source = "CSV transactions"
+                except ValueError as e:
+                    st.error(f"Could not parse CSV: {e}")
+                    return False
+                except Exception as e:
+                    st.error(f"Could not parse CSV: {e}")
                     return False
 
         # Fall back to this session's earlier upload, then this browser's
@@ -982,7 +1086,26 @@ def _ensure_holdings_loaded(ls: LocalStorage) -> bool:
         # fallback would show one user another user's portfolio.
         if rows is None and "holdings_rows" in st.session_state:
             rows = st.session_state["holdings_rows"]
+            realized = st.session_state.get("realized_pl")
             source = "session (loaded earlier)"
+        # Prefer the CSV restore (carries realized P&L) over the legacy
+        # holdings-rows restore. Either is fine, but CSV is richer.
+        if rows is None:
+            saved_csv = load_transactions_from_browser(ls)
+            if saved_csv:
+                try:
+                    txs = parse_transactions_csv(saved_csv)
+                    h_rows, realized = aggregate_transactions(txs)
+                    if h_rows or realized:
+                        rows = h_rows
+                        st.session_state["holdings_rows"] = rows
+                        st.session_state["realized_pl"] = realized
+                        st.session_state["transactions_text_input"] = saved_csv
+                        source = "saved CSV in this browser"
+                except Exception:
+                    # If the saved CSV no longer parses (schema drift), fall
+                    # through to the next restore path silently.
+                    pass
         if rows is None:
             restored = load_holdings_from_browser(ls)
             if restored:
@@ -1000,7 +1123,10 @@ def _ensure_holdings_loaded(ls: LocalStorage) -> bool:
                 return False
 
         if not rows:
-            st.info("👆 Paste your YAML in the **Paste** tab and click **Apply**.")
+            st.info(
+                "👆 Paste YAML in the **Paste** tab, or a transaction log in "
+                "the **CSV** tab, and click **Apply**."
+            )
             return False
 
         # When holdings change (signature includes ticker and shares): trigger a
@@ -1011,6 +1137,14 @@ def _ensure_holdings_loaded(ls: LocalStorage) -> bool:
             st.session_state["holdings_sig"] = rows_sig
             st.session_state["holdings_changed"] = True
             save_holdings_to_browser(ls, rows)
+
+        # Persist the raw CSV alongside the derived rows when the CSV tab was
+        # the active source. `applied_csv_text == ""` means a YAML source ran;
+        # clear the CSV slot so it doesn't get restored next time.
+        if applied_csv_text:
+            save_transactions_to_browser(ls, applied_csv_text)
+        elif applied_csv_text == "" and ls.getItem(LS_TRANSACTIONS_KEY) is not None:
+            ls.deleteItem(LS_TRANSACTIONS_KEY, key="ls_clear_transactions_apply")
 
         st.caption(f"Source: {source} · {len(rows)} tickers")
         return True
@@ -1522,6 +1656,58 @@ def main() -> None:
                 "ticker": st.column_config.Column(pinned=True),
             },
         )
+
+        # Realized P&L from CSV transactions (only present when the user
+        # imported a transaction log with sell rows).
+        realized = st.session_state.get("realized_pl") or []
+        if realized:
+            st.markdown("##### Realized P&L (closed positions)")
+            realized_df = pd.DataFrame(realized)
+            usd_pl = realized_df.loc[realized_df["currency"] == "USD", "realized_pl"].sum()
+            twd_pl = realized_df.loc[realized_df["currency"] == "TWD", "realized_pl"].sum()
+            # Convert USD realized to TWD using the latest available rate for
+            # an at-a-glance combined number. Per-trade FX would need the
+            # transaction's own date; we keep it simple here.
+            latest_fx = fx_today or (
+                fx["rate"].iloc[-1] if not fx.empty and "rate" in fx else None
+            )
+            combined_twd = twd_pl + (usd_pl * latest_fx if latest_fx else 0)
+
+            mcol1, mcol2, mcol3 = st.columns(3)
+            with mcol1:
+                st.metric("Realized (USD)", f"$ {usd_pl:+,.2f}")
+            with mcol2:
+                st.metric("Realized (TWD)", f"NT$ {twd_pl:+,.0f}")
+            with mcol3:
+                if latest_fx:
+                    st.metric(
+                        "Combined (TWD)",
+                        f"NT$ {combined_twd:+,.0f}",
+                        help=f"USD realized × {latest_fx:.2f} + TWD realized",
+                    )
+
+            realized_view = realized_df.rename(columns={
+                "shares_sold": "shares sold",
+                "realized_pl": "realized P&L",
+            })[["ticker", "currency", "shares sold", "cost", "proceeds", "realized P&L"]]
+            realized_styled = realized_view.style.format({
+                "shares sold": "{:,.2f}",
+                "cost": "{:,.2f}",
+                "proceeds": "{:,.2f}",
+                "realized P&L": "{:+,.2f}",
+            }).map(
+                lambda v: (
+                    f"color:{theme['up']}" if (isinstance(v, (int, float)) and v >= 0)
+                    else f"color:{theme['down']}"
+                ) if pd.notna(v) else "",
+                subset=["realized P&L"],
+            )
+            st.dataframe(
+                realized_styled,
+                use_container_width=True,
+                hide_index=True,
+                column_config={"ticker": st.column_config.Column(pinned=True)},
+            )
 
         pie_df = view[view["market_value_twd"].notna() & (view["market_value_twd"] > 0)].copy()
         if not pie_df.empty:

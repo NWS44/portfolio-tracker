@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import argparse
+import csv
+import io
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -52,6 +54,151 @@ def parse_holdings_yaml(content: str) -> list[dict]:
         r.setdefault("cost_basis", None)
         r.setdefault("currency", "USD" if r.get("market") == "US" else "TWD")
     return rows
+
+
+TX_REQUIRED_COLS = ("ticker", "market", "shares", "price", "action", "date")
+
+
+def parse_transactions_csv(content: str) -> list[dict]:
+    """Parse a CSV transaction log into a list of transaction dicts.
+
+    Required columns (case-insensitive, comma-separated):
+      ticker, market, shares, price, action, date
+
+    Optional column:
+      avg_buy_price — required on rows where action is 'sell'/'sale'.
+
+    `action` accepts 'buy', 'b', 'sell', 'sale', or 's'. `date` is YYYY-MM-DD.
+    Currency is inferred from market (US→USD, TW→TWD).
+    """
+    reader = csv.DictReader(io.StringIO(content))
+    if not reader.fieldnames:
+        return []
+
+    headers = {h.strip().lower(): h for h in reader.fieldnames if h}
+    missing = [c for c in TX_REQUIRED_COLS if c not in headers]
+    if missing:
+        raise ValueError(
+            f"CSV is missing required columns: {', '.join(missing)}. "
+            f"Expected: {', '.join(TX_REQUIRED_COLS)}, [avg_buy_price]."
+        )
+
+    transactions: list[dict] = []
+    for row_num, raw in enumerate(reader, start=2):
+        row = {(k or "").strip().lower(): (v or "").strip() for k, v in raw.items()}
+        if not row.get("ticker"):
+            continue  # silently skip empty rows
+
+        ticker = row["ticker"].upper()
+        market = row.get("market", "").upper()
+        if market not in ("US", "TW"):
+            raise ValueError(f"Row {row_num}: market must be US or TW (got {market!r}).")
+
+        try:
+            shares = float(row["shares"])
+            price = float(row["price"])
+        except ValueError as e:
+            raise ValueError(f"Row {row_num}: invalid shares/price — {e}")
+        if shares <= 0 or price <= 0:
+            raise ValueError(f"Row {row_num}: shares and price must be positive.")
+
+        action_raw = row.get("action", "").lower()
+        if action_raw in ("buy", "b"):
+            action = "buy"
+        elif action_raw in ("sell", "sale", "s"):
+            action = "sell"
+        else:
+            raise ValueError(f"Row {row_num}: action must be buy/sell (got {action_raw!r}).")
+
+        try:
+            tx_date = datetime.strptime(row["date"], "%Y-%m-%d").date().isoformat()
+        except ValueError:
+            raise ValueError(f"Row {row_num}: date must be YYYY-MM-DD (got {row.get('date')!r}).")
+
+        avg_buy_price = None
+        if action == "sell":
+            avg_str = row.get("avg_buy_price", "")
+            if not avg_str:
+                raise ValueError(
+                    f"Row {row_num}: sell rows require an avg_buy_price column "
+                    f"(the average cost of the shares being sold)."
+                )
+            try:
+                avg_buy_price = float(avg_str)
+            except ValueError:
+                raise ValueError(f"Row {row_num}: invalid avg_buy_price {avg_str!r}.")
+            if avg_buy_price < 0:
+                raise ValueError(f"Row {row_num}: avg_buy_price cannot be negative.")
+
+        transactions.append({
+            "ticker": ticker,
+            "market": market,
+            "shares": shares,
+            "price": price,
+            "action": action,
+            "date": tx_date,
+            "avg_buy_price": avg_buy_price,
+            "currency": "USD" if market == "US" else "TWD",
+        })
+
+    return transactions
+
+
+def aggregate_transactions(transactions: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Roll up a transaction log into current holdings + realized P&L per ticker.
+
+    Net shares = buys − sells. Cost basis of remaining shares is the weighted
+    average of buys minus the cost already removed by sells (sell_shares ×
+    avg_buy_price). Tickers that net to zero are omitted from holdings but
+    still appear in the realized P&L list.
+
+    Returns (holdings_rows, realized_summary).
+    """
+    by_ticker: dict[str, dict] = {}
+    for tx in sorted(transactions, key=lambda t: (t["ticker"], t["date"])):
+        agg = by_ticker.setdefault(tx["ticker"], {
+            "ticker": tx["ticker"],
+            "market": tx["market"],
+            "currency": tx["currency"],
+            "bought_shares": 0.0,
+            "buy_cost": 0.0,
+            "sold_shares": 0.0,
+            "sold_cost": 0.0,  # Σ sold_shares × avg_buy_price
+            "proceeds": 0.0,   # Σ sold_shares × sale_price
+        })
+        if tx["action"] == "buy":
+            agg["bought_shares"] += tx["shares"]
+            agg["buy_cost"] += tx["shares"] * tx["price"]
+        else:
+            agg["sold_shares"] += tx["shares"]
+            agg["sold_cost"] += tx["shares"] * (tx["avg_buy_price"] or 0.0)
+            agg["proceeds"] += tx["shares"] * tx["price"]
+
+    holdings: list[dict] = []
+    realized: list[dict] = []
+    for agg in by_ticker.values():
+        net_shares = agg["bought_shares"] - agg["sold_shares"]
+        if net_shares > 1e-9:
+            remaining_cost = agg["buy_cost"] - agg["sold_cost"]
+            cost_basis = remaining_cost / net_shares if net_shares > 0 else 0.0
+            holdings.append({
+                "ticker": agg["ticker"],
+                "market": agg["market"],
+                "shares": net_shares,
+                "cost_basis": cost_basis,
+                "currency": agg["currency"],
+            })
+        if agg["sold_shares"] > 0:
+            realized.append({
+                "ticker": agg["ticker"],
+                "currency": agg["currency"],
+                "shares_sold": agg["sold_shares"],
+                "proceeds": agg["proceeds"],
+                "cost": agg["sold_cost"],
+                "realized_pl": agg["proceeds"] - agg["sold_cost"],
+            })
+
+    return holdings, realized
 
 
 def load_holdings_yaml(path: Path = DEFAULT_HOLDINGS) -> list[dict]:
