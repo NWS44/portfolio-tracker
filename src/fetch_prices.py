@@ -9,12 +9,31 @@ from pathlib import Path
 
 import pandas as pd
 import yaml
-import yfinance as yf
 
+# yfinance (and its native dep curl_cffi) is only needed when we actually hit
+# Yahoo to fetch prices. Importing it eagerly means an install/ABI problem on
+# the host (e.g. Streamlit Cloud bumping its Python) takes down the ENTIRE app
+# at import time — even though parsing holdings and rendering cached prices
+# don't need it. So we import it lazily via `_get_yf()` and surface a clear
+# error only when a fetch is attempted.
 try:
     from zoneinfo import ZoneInfo
 except ImportError:  # pragma: no cover
     ZoneInfo = None  # type: ignore
+
+
+def _get_yf():
+    """Import yfinance on demand. Raises a clear RuntimeError if it (or its
+    native dependency curl_cffi) can't be imported in this environment."""
+    try:
+        import yfinance as yf
+    except Exception as e:  # ImportError, or curl_cffi ABI errors, etc.
+        raise RuntimeError(
+            "yfinance is unavailable in this environment, so prices can't be "
+            f"fetched right now ({type(e).__name__}: {e}). Cached prices in the "
+            "database still display normally."
+        ) from e
+    return yf
 
 from db import (
     DB_PATH,
@@ -224,6 +243,7 @@ def _latest_quote_row(ticker: str) -> pd.DataFrame:
     Returns an empty DataFrame if no live quote is available.
     """
     try:
+        yf = _get_yf()
         info = yf.Ticker(ticker).info
     except Exception:
         return pd.DataFrame()
@@ -267,6 +287,7 @@ def _download_one(
     Use either (start, end) for a date range or `period` (e.g. 'max') for full history.
     Drops rows with null or zero close price (market holidays / bad data).
     """
+    yf = _get_yf()
     kwargs = dict(progress=False, auto_adjust=False, actions=False)
     if period:
         df = yf.download(ticker, period=period, **kwargs)
