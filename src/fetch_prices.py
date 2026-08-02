@@ -118,8 +118,12 @@ def parse_transactions_csv(content: str) -> list[dict]:
             price = float(row["price"])
         except ValueError as e:
             raise ValueError(f"Row {row_num}: invalid shares/price — {e}")
-        if shares <= 0 or price <= 0:
-            raise ValueError(f"Row {row_num}: shares and price must be positive.")
+        if shares <= 0:
+            raise ValueError(f"Row {row_num}: shares must be positive.")
+        # price == 0 is allowed (e.g. free RSU / stock grant with zero cost);
+        # only a negative price is invalid.
+        if price < 0:
+            raise ValueError(f"Row {row_num}: price cannot be negative.")
 
         action_raw = row.get("action", "").lower()
         if action_raw in ("buy", "b"):

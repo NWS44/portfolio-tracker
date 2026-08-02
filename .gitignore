@@ -10,6 +10,8 @@ venv/
 
 # Personal holdings — never commit. Use holdings.yaml.example as a template.
 config/holdings.yaml
+# Personal transaction logs (CSV uploads) — never commit.
+config/*.csv
 
 # Bundled tools (not source code)
 tools/

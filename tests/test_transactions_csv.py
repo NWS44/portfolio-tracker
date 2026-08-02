@@ -106,5 +106,41 @@ B,TW,1,100,buy,2024-01-01,
     assert txs[1]["currency"] == "TWD"
 
 
+def test_zero_price_rsu_grant_accepted():
+    """Free RSU / stock grants have a $0 cost — price 0 must be allowed and
+    should drag the weighted-average cost basis down accordingly."""
+    csv = """ticker,market,shares,price,action,date,avg_buy_price
+SNPS,US,40,0.0,buy,2022-05-20,
+SNPS,US,10,300.00,buy,2022-06-01,
+"""
+    txs = parse_transactions_csv(csv)
+    assert len(txs) == 2
+    assert txs[0]["price"] == 0.0
+
+    h, _ = aggregate_transactions(txs)
+    snps = next(x for x in h if x["ticker"] == "SNPS")
+    assert snps["shares"] == pytest.approx(50.0)
+    # (40*0 + 10*300) / 50 = 60
+    assert snps["cost_basis"] == pytest.approx(60.0)
+
+
+def test_all_zero_price_grant_has_zero_cost_basis():
+    csv = "ticker,market,shares,price,action,date,avg_buy_price\nSNPS,US,100,0.0,buy,2020-09-03,\n"
+    h, _ = aggregate_transactions(parse_transactions_csv(csv))
+    assert h[0]["cost_basis"] == pytest.approx(0.0)
+
+
+def test_negative_price_raises():
+    bad = "ticker,market,shares,price,action,date,avg_buy_price\nVTI,US,5,-10,buy,2024-01-01,\n"
+    with pytest.raises(ValueError, match="price cannot be negative"):
+        parse_transactions_csv(bad)
+
+
+def test_zero_or_negative_shares_raises():
+    bad = "ticker,market,shares,price,action,date,avg_buy_price\nVTI,US,0,100,buy,2024-01-01,\n"
+    with pytest.raises(ValueError, match="shares must be positive"):
+        parse_transactions_csv(bad)
+
+
 def test_empty_csv_returns_empty_list():
     assert parse_transactions_csv("") == []
