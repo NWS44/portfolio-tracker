@@ -1651,15 +1651,15 @@ def main() -> None:
             lambda r: r["market_value"] if r["currency"] == "TWD" else r["market_value"] * (r["fx_rate"] or 0),
             axis=1,
         )
+        view["cost_value_twd"] = view.apply(
+            lambda r: r["cost_value"] if r["currency"] == "TWD" else r["cost_value"] * (r["fx_rate"] or 0),
+            axis=1,
+        )
+        view["unrealized_pl_twd"] = view["market_value_twd"] - view["cost_value_twd"]
         # Build a Styler so gain/loss columns render green/red.
         # NumberColumn formats don't support per-cell color, but Styler
         # via st.dataframe does — at the cost of losing column_config
         # formats, so we apply formats inside the Styler instead.
-        gain_cols = [
-            "daily_gain", "daily_gain_pct", "daily_gain_twd",
-            "unrealized_pl", "unrealized_pl_pct",
-        ]
-
         def _color_sign(v):
             if pd.isna(v):
                 return ""
@@ -1669,17 +1669,17 @@ def main() -> None:
             [
                 "ticker", "market", "currency", "shares",
                 "cost_basis", "last_close", "as_of",
-                "daily_gain", "daily_gain_pct", "daily_gain_twd",
-                "market_value", "market_value_twd",
-                "cost_value", "unrealized_pl", "unrealized_pl_pct",
+                "daily_gain_twd", "daily_gain_pct",
+                "market_value_twd",
+                "cost_value_twd", "unrealized_pl_twd", "unrealized_pl_pct",
             ]
         ].rename(
             columns={
-                "daily_gain": "daily_gain (native)",
-                "daily_gain_pct": "daily_gain %",
                 "daily_gain_twd": "daily_gain (TWD)",
-                "market_value": "market_value (native)",
+                "daily_gain_pct": "daily_gain %",
                 "market_value_twd": "market_value (TWD)",
+                "cost_value_twd": "cost_value (TWD)",
+                "unrealized_pl_twd": "unrealized_pl (TWD)",
             }
         )
 
@@ -1687,19 +1687,17 @@ def main() -> None:
             "shares": "{:,.2f}",
             "cost_basis": "{:,.4f}",
             "last_close": "{:,.2f}",
-            "daily_gain (native)": "{:+,.2f}",
-            "daily_gain %": "{:+.2f}%",
             "daily_gain (TWD)": "{:+,.0f}",
-            "market_value (native)": "{:,.2f}",
+            "daily_gain %": "{:+.2f}%",
             "market_value (TWD)": "{:,.0f}",
-            "cost_value": "{:,.2f}",
-            "unrealized_pl": "{:+,.2f}",
+            "cost_value (TWD)": "{:,.0f}",
+            "unrealized_pl (TWD)": "{:+,.0f}",
             "unrealized_pl_pct": "{:+.2f}%",
         }, na_rep="—").map(
             _color_sign,
             subset=[
-                "daily_gain (native)", "daily_gain %", "daily_gain (TWD)",
-                "unrealized_pl", "unrealized_pl_pct",
+                "daily_gain (TWD)", "daily_gain %",
+                "unrealized_pl (TWD)", "unrealized_pl_pct",
             ],
         )
 
