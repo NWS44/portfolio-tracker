@@ -1667,7 +1667,7 @@ def main() -> None:
 
         view_table = view[
             [
-                "ticker", "market", "currency", "shares",
+                "ticker", "market", "shares",
                 "cost_basis", "last_close", "as_of",
                 "daily_gain_twd", "daily_gain_pct",
                 "market_value_twd",
