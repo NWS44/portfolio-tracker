@@ -31,31 +31,39 @@ def shares_held_on_dates(
     if not transactions or prices.empty:
         return pd.DataFrame(columns=["ticker", "date", "shares"])
 
+    # Work in plain Python str/float. ISO dates (YYYY-MM-DD) sort chronologically
+    # as strings, so we can carry the position forward with reindex + ffill and
+    # avoid merge_asof / to_datetime — those choke on the PyArrow-backed dtypes
+    # that pandas uses on Streamlit Cloud (Python 3.14).
     tx = pd.DataFrame(transactions)
-    tx["delta"] = tx["shares"].where(tx["action"] == "buy", -tx["shares"])
-    deltas = (
-        tx.groupby(["ticker", "date"], as_index=False)["delta"].sum()
-    )
-    deltas["_d"] = pd.to_datetime(deltas["date"])
-    deltas = deltas.sort_values(["ticker", "_d"])
-    deltas["shares"] = deltas.groupby("ticker")["delta"].cumsum()
+    tx["date"] = tx["date"].astype(str)
+    tx["ticker"] = tx["ticker"].astype(str)
+    tx["delta"] = [
+        s if a == "buy" else -s
+        for s, a in zip(tx["shares"].astype(float), tx["action"])
+    ]
 
-    price_dates = prices[["ticker", "date"]].drop_duplicates().copy()
-    price_dates["_d"] = pd.to_datetime(price_dates["date"])
-    price_dates = price_dates.sort_values("_d")
+    price_dates_by_ticker: dict[str, list[str]] = {
+        str(t): sorted(str(d) for d in g["date"].unique())
+        for t, g in prices.groupby("ticker")
+    }
 
-    # For each price date, carry the last known net position forward (a share
-    # count only changes on transaction dates). merge_asof needs the join key
-    # sorted and datetime-typed, hence the temporary `_d` column.
-    merged = pd.merge_asof(
-        price_dates,
-        deltas[["ticker", "_d", "shares"]].sort_values("_d"),
-        on="_d",
-        by="ticker",
-        direction="backward",
-    )
-    merged = merged[merged["shares"].notna() & (merged["shares"] > 0)]
-    return merged[["ticker", "date", "shares"]]
+    out: list[tuple[str, str, float]] = []
+    for ticker, g in tx.groupby("ticker"):
+        pdates = price_dates_by_ticker.get(str(ticker))
+        if not pdates:
+            continue
+        # Cumulative net position on each transaction date (chronological).
+        cum = g.groupby("date")["delta"].sum().sort_index().cumsum()
+        # Reindex onto (transaction ∪ price) dates, carry forward, then read off
+        # the price dates. A buy on a non-trading day takes effect on the next
+        # price date; days before the first buy stay NaN and are dropped.
+        axis = sorted(set(cum.index) | set(pdates))
+        held = cum.reindex(axis).ffill().reindex(pdates)
+        held = held[held.notna() & (held > 0)]
+        out.extend((str(ticker), d, float(v)) for d, v in held.items())
+
+    return pd.DataFrame(out, columns=["ticker", "date", "shares"])
 
 
 def compute_daily_totals(
@@ -89,11 +97,18 @@ def compute_daily_totals(
 
     prices = prices.rename(columns={"close": "close_price"})
     prices = prices[prices["close_price"].notna() & (prices["close_price"] > 0)]
+    # Normalise join-key dtypes to plain str: on Streamlit Cloud pandas hands
+    # back PyArrow-backed columns that don't merge cleanly with our str keys.
+    prices = prices.copy()
+    prices["ticker"] = prices["ticker"].astype(str)
+    prices["date"] = prices["date"].astype(str)
 
     if transactions:
         shares_ts = shares_held_on_dates(transactions, prices)
         merged = prices.merge(shares_ts, on=["ticker", "date"], how="inner")
         currency = holdings[["ticker", "currency"]].drop_duplicates()
+        currency = currency.copy()
+        currency["ticker"] = currency["ticker"].astype(str)
         merged = merged.merge(currency, on="ticker", how="left")
     else:
         merged = prices.merge(
