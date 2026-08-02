@@ -1685,7 +1685,7 @@ def main() -> None:
 
         styled = view_table.style.format({
             "shares": "{:,.2f}",
-            "cost_basis": "{:,.4f}",
+            "cost_basis": "{:,.2f}",
             "last_close": "{:,.2f}",
             "daily_gain (TWD)": "{:+,.0f}",
             "daily_gain %": "{:+.2f}%",
