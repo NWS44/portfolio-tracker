@@ -15,7 +15,17 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
+import pandas as pd  # noqa: E402
+
+from compute_totals import compute_daily_totals, shares_held_on_dates  # noqa: E402
 from fetch_prices import aggregate_transactions, parse_transactions_csv  # noqa: E402
+
+
+def _prices(rows):
+    """rows: list of (ticker, date, close)."""
+    return pd.DataFrame(
+        [{"ticker": t, "date": d, "close": c} for t, d, c in rows]
+    )
 
 
 CSV_OK = """ticker,market,shares,price,action,date,avg_buy_price
@@ -144,3 +154,59 @@ def test_zero_or_negative_shares_raises():
 
 def test_empty_csv_returns_empty_list():
     assert parse_transactions_csv("") == []
+
+
+# --------------------------------------------------------------------------
+# Date-aware daily totals — a holding contributes only from its buy date, and
+# reflects later top-ups. This is what makes the daily portfolio value track
+# actual accumulation instead of applying today's share count to all history.
+# --------------------------------------------------------------------------
+
+PRICE_DATES = [
+    ("VTI", "2024-01-01", 100.0),
+    ("VTI", "2024-01-02", 110.0),
+    ("VTI", "2024-01-03", 120.0),
+    ("VTI", "2024-01-04", 130.0),
+]
+
+
+def test_shares_held_steps_on_buy_dates():
+    txs = [
+        {"ticker": "VTI", "shares": 10, "action": "buy", "date": "2024-01-02"},
+        {"ticker": "VTI", "shares": 5, "action": "buy", "date": "2024-01-04"},
+    ]
+    held = shares_held_on_dates(txs, _prices(PRICE_DATES))
+    by_date = dict(zip(held["date"], held["shares"]))
+    assert "2024-01-01" not in by_date          # before first buy → absent
+    assert by_date["2024-01-02"] == 10          # first buy
+    assert by_date["2024-01-03"] == 10          # carried forward
+    assert by_date["2024-01-04"] == 15          # top-up
+
+
+def test_date_aware_value_excludes_pre_buy_days():
+    holdings = pd.DataFrame(
+        [{"ticker": "VTI", "market": "US", "shares": 15, "cost_basis": 0, "currency": "USD"}]
+    )
+    txs = [
+        {"ticker": "VTI", "shares": 10, "action": "buy", "date": "2024-01-02"},
+        {"ticker": "VTI", "shares": 5, "action": "buy", "date": "2024-01-04"},
+    ]
+    df = compute_daily_totals(holdings=holdings, prices=_prices(PRICE_DATES), transactions=txs)
+    vals = dict(zip(df["date"], df["value"]))
+    assert "2024-01-01" not in vals             # not held yet → no value
+    assert vals["2024-01-02"] == pytest.approx(10 * 110.0)
+    assert vals["2024-01-03"] == pytest.approx(10 * 120.0)
+    assert vals["2024-01-04"] == pytest.approx(15 * 130.0)
+
+
+def test_legacy_path_applies_net_shares_to_all_history():
+    """Without transactions, the net share count is applied across all price
+    dates (the pre-existing 'held throughout' behaviour, unchanged)."""
+    holdings = pd.DataFrame(
+        [{"ticker": "VTI", "market": "US", "shares": 15, "cost_basis": 0, "currency": "USD"}]
+    )
+    df = compute_daily_totals(holdings=holdings, prices=_prices(PRICE_DATES))
+    assert len(df) == 4                          # every price date present
+    assert df["shares"].eq(15).all()             # constant net shares
+    vals = dict(zip(df["date"], df["value"]))
+    assert vals["2024-01-01"] == pytest.approx(15 * 100.0)

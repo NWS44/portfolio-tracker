@@ -980,6 +980,7 @@ def _ensure_holdings_loaded(ls: LocalStorage) -> bool:
                     else:
                         st.session_state["holdings_rows"] = rows
                         st.session_state.pop("realized_pl", None)
+                        st.session_state.pop("transactions", None)
                         applied_csv_text = ""  # clear CSV when YAML is applied
                         source = "pasted"
                 except Exception as e:
@@ -1006,6 +1007,7 @@ def _ensure_holdings_loaded(ls: LocalStorage) -> bool:
                         st.session_state["holdings_rows"] = rows
                         st.session_state["holdings_text"] = content
                         st.session_state.pop("realized_pl", None)
+                        st.session_state.pop("transactions", None)
                         applied_csv_text = ""
                         source = "uploaded"
                 except Exception as e:
@@ -1070,6 +1072,7 @@ def _ensure_holdings_loaded(ls: LocalStorage) -> bool:
                             rows = h_rows
                             st.session_state["holdings_rows"] = rows
                             st.session_state["realized_pl"] = realized
+                            st.session_state["transactions"] = txs
                             applied_csv_text = csv_to_apply
                             source = "CSV transactions"
                 except ValueError as e:
@@ -1100,6 +1103,7 @@ def _ensure_holdings_loaded(ls: LocalStorage) -> bool:
                         rows = h_rows
                         st.session_state["holdings_rows"] = rows
                         st.session_state["realized_pl"] = realized
+                        st.session_state["transactions"] = txs
                         st.session_state["transactions_text_input"] = saved_csv
                         source = "saved CSV in this browser"
                 except Exception:
@@ -1111,12 +1115,14 @@ def _ensure_holdings_loaded(ls: LocalStorage) -> bool:
             if restored:
                 rows = restored
                 st.session_state["holdings_rows"] = rows
+                st.session_state.pop("transactions", None)
                 source = "saved in this browser"
         if rows is None and LOCAL_HOLDINGS_PATH.exists():
             try:
                 with open(LOCAL_HOLDINGS_PATH, "r", encoding="utf-8") as f:
                     rows = parse_holdings_yaml(f.read())
                 st.session_state["holdings_rows"] = rows
+                st.session_state.pop("transactions", None)
                 source = "local config/holdings.yaml"
             except Exception as e:
                 st.error(f"Could not read local holdings.yaml: {e}")
@@ -1245,20 +1251,62 @@ def _ffill_pivot(totals_twd: pd.DataFrame) -> pd.DataFrame:
     )
 
 
-def combined_twd_series(totals_twd: pd.DataFrame) -> pd.DataFrame:
+def combined_twd_series(
+    totals_twd: pd.DataFrame, start_at_first: bool = False
+) -> pd.DataFrame:
     """Per-day combined portfolio value in TWD.
     Forward-fills each ticker's value so a one-market holiday (US closed but TW
-    open, or vice versa) does not drop the combined line. Starts from the date
-    every currently-held ticker has at least one observation."""
+    open, or vice versa) does not drop the combined line.
+
+    `start_at_first=False` (constant holdings): start where *every* ticker has
+    data, so a ticker with shorter price history doesn't create a misleading
+    ramp. `start_at_first=True` (date-aware transactions): start at the *first*
+    holding's buy date, so the line legitimately shows the portfolio being
+    built up over time."""
     pivot = _ffill_pivot(totals_twd)
     if pivot.empty:
         return pd.DataFrame(columns=["date", "value_twd"])
-    first_valid = pivot.replace(0, pd.NA).apply(lambda s: s.first_valid_index()).max()
-    if first_valid is not None:
-        pivot = pivot.loc[first_valid:]
+    firsts = pivot.replace(0, pd.NA).apply(lambda s: s.first_valid_index())
+    anchor = firsts.min() if start_at_first else firsts.max()
+    if anchor is not None:
+        pivot = pivot.loc[anchor:]
     out = pivot.sum(axis=1).reset_index()
     out.columns = ["date", "value_twd"]
     return out
+
+
+def _pivot0(totals_twd: pd.DataFrame, col: str) -> pd.DataFrame:
+    """date × ticker pivot of `col`, ffilled across holidays and 0-filled before
+    a ticker first appears."""
+    return (
+        totals_twd.pivot_table(index="date", columns="ticker", values=col, aggfunc="last")
+        .sort_index()
+        .ffill()
+        .fillna(0.0)
+    )
+
+
+def market_gain_by_ticker(totals_twd: pd.DataFrame) -> pd.DataFrame:
+    """date × ticker pivot of daily *market* gain in TWD — the day-over-day
+    value change with the cash flow from that day's buys/sells removed.
+
+    A buy/sell changes portfolio value but is not a market gain, so we subtract
+    (Δshares × that day's price). For constant holdings Δshares is 0 every day,
+    so this equals a plain value.diff() (and it also cleanly zeroes the spike on
+    a ticker's first appearance). Feeds the daily-gain charts and the
+    performance deltas so purchases don't read as gains."""
+    if totals_twd.empty:
+        return pd.DataFrame()
+    value = _pivot0(totals_twd, "value_twd")
+    shares = _pivot0(totals_twd, "shares")
+    price_per_share = value.div(shares).where(shares > 0, 0.0)
+    dshares = shares.diff()
+    if len(dshares) > 0:
+        # First row has no prior day; treat the opening position as bought-in
+        # (a contribution), so its value doesn't count as a gain.
+        dshares.iloc[0] = shares.iloc[0]
+    contributions = (dshares * price_per_share).fillna(0.0)
+    return value.diff() - contributions
 
 
 def stacked_twd_long(totals_twd: pd.DataFrame) -> pd.DataFrame:
@@ -1301,6 +1349,8 @@ def _wipe_all_holdings_data() -> None:
         "holdings_sig",
         "holdings_text_input",
         "holdings_changed",
+        "realized_pl",
+        "transactions",
     ):
         st.session_state.pop(key, None)
 
@@ -1430,8 +1480,13 @@ def main() -> None:
 
     # Compute this session's daily totals in-memory: shared prices × this
     # session's holdings. Never read/written from the shared DB, so each user
-    # sees only their own portfolio.
-    totals = compute_daily_totals(holdings=holdings, prices=prices)
+    # sees only their own portfolio. When a dated transaction log is present,
+    # shares are date-aware (a holding contributes only from its buy date).
+    transactions = st.session_state.get("transactions")
+    date_aware = bool(transactions)
+    totals = compute_daily_totals(
+        holdings=holdings, prices=prices, transactions=transactions
+    )
 
     if totals.empty:
         st.info("No price data yet. Click **🔄 Refresh prices** beside the title to fetch.")
@@ -1777,13 +1832,25 @@ def main() -> None:
 
     with tab_portfolio:
         ffill_twd = _ffill_pivot(totals_twd)
-        combined = combined_twd_series(totals_twd)
+        combined = combined_twd_series(totals_twd, start_at_first=date_aware)
+        # Per-ticker daily market gain (buy/sell cash flows removed). Total is
+        # the row-sum; used for both the gain charts and the performance deltas
+        # so that buying more never reads as a "gain".
+        mkt_gain_tkr = market_gain_by_ticker(totals_twd)
+        total_mkt_gain = (
+            mkt_gain_tkr.sum(axis=1) if not mkt_gain_tkr.empty else pd.Series(dtype=float)
+        )
         if not combined.empty:
             st.subheader("Portfolio performance")
             combined_sorted = combined.sort_values("date").reset_index(drop=True)
             combined_sorted["date_dt"] = pd.to_datetime(combined_sorted["date"])
             latest_dt = combined_sorted["date_dt"].max()
             latest_val = float(combined_sorted.iloc[-1]["value_twd"])
+
+            # Market gain indexed by datetime, for cumulative-over-window sums.
+            gain_by_dt = total_mkt_gain.copy()
+            gain_by_dt.index = pd.to_datetime(gain_by_dt.index)
+            val_by_dt = combined_sorted.set_index("date_dt")["value_twd"]
 
             periods = [
                 ("1D", pd.Timedelta(days=1)),
@@ -1795,6 +1862,8 @@ def main() -> None:
                 ("1Y", pd.DateOffset(years=1)),
             ]
 
+            # Performance = market gain over the window (excludes money added by
+            # purchases), as a % of the portfolio value at the window's start.
             perf_cols = st.columns(len(periods))
             for col, (label, offset) in zip(perf_cols, periods):
                 target = latest_dt - offset
@@ -1804,7 +1873,7 @@ def main() -> None:
                         st.metric(label=label, value="N/A")
                     else:
                         past_val = float(past.iloc[-1]["value_twd"])
-                        delta = latest_val - past_val
+                        delta = float(gain_by_dt[gain_by_dt.index > target].sum())
                         delta_pct = (delta / past_val * 100.0) if past_val > 0 else 0.0
                         st.metric(
                             label=label,
@@ -1862,10 +1931,16 @@ def main() -> None:
                 return None  # "All"
 
             if gain_view == "Total":
-                gain = combined.copy()
-                gain["gain_twd"] = gain["value_twd"].diff()
-                gain["gain_pct"] = gain["value_twd"].pct_change() * 100.0
-                gain = gain.dropna(subset=["gain_twd"])
+                # Market gain (buys/sells removed), as % of the prior day's
+                # combined value.
+                val_series = _pivot0(totals_twd, "value_twd").sum(axis=1)
+                gain = pd.DataFrame({
+                    "date": total_mkt_gain.index,
+                    "gain_twd": total_mkt_gain.values,
+                    "prev_val": val_series.shift().values,
+                })
+                gain = gain[gain["prev_val"] > 0].copy()
+                gain["gain_pct"] = gain["gain_twd"] / gain["prev_val"] * 100.0
                 if not gain.empty:
                     gain["date"] = pd.to_datetime(gain["date"])
 
@@ -1907,15 +1982,20 @@ def main() -> None:
                     fig_gain.update_yaxes(title_text="Gain (%)", secondary_y=True, autorange=True)
                     st.plotly_chart(fig_gain, use_container_width=True, config={"displaylogo": False})
             else:
+                # Per-ticker market gain, restricted to days the ticker is
+                # actually held (so pre-buy days don't show as 0 bars).
+                shares_pivot0 = _pivot0(totals_twd, "shares")
                 stock_gains = []
-                for ticker in ffill_twd.columns:
-                    ticker_data = ffill_twd[[ticker]].copy()
-                    ticker_data.columns = ["value_twd"]
-                    ticker_data["ticker"] = ticker
-                    ticker_data["date"] = ticker_data.index
-                    ticker_data["gain_twd"] = ticker_data["value_twd"].diff()
-                    ticker_data["gain_pct"] = ticker_data["value_twd"].pct_change() * 100.0
-                    ticker_data = ticker_data.dropna(subset=["gain_twd"])
+                for ticker in mkt_gain_tkr.columns:
+                    held = shares_pivot0[ticker] > 0
+                    s = mkt_gain_tkr[ticker][held]
+                    if s.empty:
+                        continue
+                    ticker_data = pd.DataFrame({
+                        "date": s.index,
+                        "ticker": ticker,
+                        "gain_twd": s.values,
+                    }).dropna(subset=["gain_twd"])
                     stock_gains.append(ticker_data)
 
                 if stock_gains:
