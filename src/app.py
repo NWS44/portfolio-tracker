@@ -1441,10 +1441,6 @@ def main() -> None:
     with st.sidebar:
         st.caption("Holdings are saved in your browser only (this device).")
 
-    today = date.today()
-    default_start = today - timedelta(days=365)
-    start_d, end_d = default_start, today
-
     # Now fill the reserved slot at the top — holdings exist at this point.
     with controls_slot.container():
         st.header("Controls")
@@ -1453,14 +1449,6 @@ def main() -> None:
             # before this session re-resolves (and re-saves) holdings.
             st.session_state["pending_clear"] = True
             st.rerun()
-
-        date_range = st.date_input(
-            "Date range",
-            value=(default_start, today),
-            max_value=today,
-        )
-        if isinstance(date_range, tuple) and len(date_range) == 2:
-            start_d, end_d = date_range
 
         st.divider()
 
@@ -1473,6 +1461,45 @@ def main() -> None:
     # Streamlit Cloud, or a newly added ticker).
     _ensure_prices_loaded(holdings["ticker"].tolist())
 
+    # When a dated transaction log is present, shares are date-aware (a holding
+    # contributes only from its buy date), and "All" spans from the first buy.
+    transactions = st.session_state.get("transactions")
+    date_aware = bool(transactions)
+
+    # Date-range control (main page). "All" = first buy date → today for a
+    # transaction log; otherwise the full available price history.
+    today = date.today()
+    first_buy_str = (
+        min((t["date"] for t in transactions), default=None) if transactions else None
+    )
+    all_start = date.fromisoformat(first_buy_str) if first_buy_str else date(2000, 1, 1)
+
+    st.caption("Date range")
+    range_choice = st.radio(
+        "Date range",
+        ["1M", "3M", "6M", "1Y", "All", "Custom"],
+        index=3,
+        horizontal=True,
+        label_visibility="collapsed",
+        key="main_date_range",
+    )
+    _preset_days = {"1M": 30, "3M": 90, "6M": 180, "1Y": 365}
+    if range_choice == "Custom":
+        picked = st.date_input(
+            "Custom range",
+            value=(today - timedelta(days=365), today),
+            max_value=today,
+            key="custom_date_range",
+        )
+        if isinstance(picked, tuple) and len(picked) == 2:
+            start_d, end_d = picked
+        else:
+            start_d, end_d = today - timedelta(days=365), today
+    elif range_choice == "All":
+        start_d, end_d = all_start, today
+    else:
+        start_d, end_d = today - timedelta(days=_preset_days[range_choice]), today
+
     start_s = start_d.isoformat()
     end_s = end_d.isoformat()
     prices = get_prices(tuple(holdings["ticker"].tolist()), start_s, end_s)
@@ -1480,10 +1507,7 @@ def main() -> None:
 
     # Compute this session's daily totals in-memory: shared prices × this
     # session's holdings. Never read/written from the shared DB, so each user
-    # sees only their own portfolio. When a dated transaction log is present,
-    # shares are date-aware (a holding contributes only from its buy date).
-    transactions = st.session_state.get("transactions")
-    date_aware = bool(transactions)
+    # sees only their own portfolio.
     totals = compute_daily_totals(
         holdings=holdings, prices=prices, transactions=transactions
     )
